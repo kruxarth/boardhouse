@@ -1,159 +1,70 @@
-# Turborepo starter
+# board-house
 
-This Turborepo starter is maintained by the Turborepo core team.
+Ten tables. Closed doors. One day.
 
-## Using this example
+A private room for up to ten people to draw, talk, and leave with a replay. There are only ten rooms on the whole service. When they’re taken, you wait. When twenty-four hours pass, the room is deleted.
 
-Run the following command:
+It is not a document you keep. It is a sitting.
 
-```sh
-npx create-turbo@latest
-```
+## Why this, and not Excalidraw
 
-## What's inside?
+Excalidraw is a file. You open a board, you share a URL, you treat the drawing as something that should still be there next month. That’s the right product for “I need a diagram.”
 
-This Turborepo includes the following packages/apps:
+board-house is for the other job: a conversation that needs a whiteboard, and then needs to be over.
 
-### Apps and Packages
+**A closed door.** Rooms are not listed. No lobby, no thumbnails, no “who’s drawing.” You get in because the host admits you, or because they handed you a key. A leaked link does not have to stay an invitation — the host can put the door back on.
 
-- `docs`: a [Next.js](https://nextjs.org/) app
-- `web`: another [Next.js](https://nextjs.org/) app
-- `@repo/ui`: a stub React component library shared by both `web` and `docs` applications
-- `@repo/eslint-config`: `eslint` configurations (includes `eslint-config-next` and `eslint-config-prettier`)
-- `@repo/typescript-config`: `tsconfig.json`s used throughout the monorepo
+**A group, not an audience.** Ten people. No spectators, no accounts. If you’re in, you can talk, export, and try for a marker. If you’re not admitted, you see a door.
 
-Each package/app is 100% [TypeScript](https://www.typescriptlang.org/).
+**Two markers.** Like hosting a call while someone shares a board: one person presents, one annotates. A free marker you pick up. An occupied one you ask that person for. The host can take it off you, the way a Meet host stops a share. Everyone else points. Nobody else draws.
 
-### Utilities
+**Voice in the same tab.** Meet-style mute: click on, click off. Host can mute you; only you can unmute yourself. Audio is LiveKit, not our websocket.
 
-This Turborepo has some additional tools already setup for you:
+**The board is supposed to die.** Twenty-four hours, then it’s gone from the server. Anyone at the table can export the replay. If nobody does, it didn’t happen.
 
-- [TypeScript](https://www.typescriptlang.org/) for static type checking
-- [ESLint](https://eslint.org/) for code linting
-- [Prettier](https://prettier.io) for code formatting
+**Ten tables, total.** The only public number is occupancy: `3 / 10`. When the house is full, the house is full.
 
-### Build
+## A sitting
 
-To build all apps and packages, run the following command:
+1. You pick a display name. There is no signup.
+2. Host opens a table, if one of the ten is free. They get a guest link and a host link.
+3. Default is **knock**. People wait; the host admits or denies. Host can switch to **open link** (the URL is the key until the table is full) and can rotate that key.
+4. Ten seats. Full means full, even with the key.
+5. Two markers. Host starts with Marker one; Marker two sits on the table.
+6. Mic toggles like Meet. Host may mute, never unmute someone else.
+7. Anyone inside can download the replay.
+8. At twenty-four hours the table is wiped.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+## The rules
 
-```sh
-cd my-turborepo
-turbo build
-```
+| | |
+| --- | --- |
+| 10 rooms on the service | A place, not a cloud. When it’s full, it’s full. |
+| 10 people per room | A discussion. Not a stream. |
+| No spectators | An audience changes how people draw. |
+| No accounts | A name and a link, like a call. |
+| Knock, or a key | Privacy is the default. |
+| Two markers | Pair on the board. Everyone else points. |
+| Meet-style mute | Click to talk. Host can mute; only you unmute yourself. |
+| 24 hours | A sitting, not an asset. |
+| Anyone inside can export | You’re already in the room. |
 
-Without global `turbo`, use your package manager:
+## Repo
 
-```sh
-cd my-turborepo
-npx turbo build
-pnpm dlx turbo build
-pnpm exec turbo build
-```
+- `README.md` — this (why)
+- `implementation.md` — engineering source of truth for agents and implementers (how, what’s already built, what to rip out)
+- `apps/web` — Next.js client
+- `apps/http-backend` — HTTP API
+- `apps/ws-backend` — live room events (not audio)
+- `packages/db` — Neon/Postgres for room metadata, not every stroke
 
-You can build a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
+The product is board-house. See `implementation.md` for the contract.
 
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo build --filter=docs
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-pnpm exec turbo build --filter=docs
-```
-
-### Develop
-
-To develop all apps and packages, run the following command:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
+## Run it
 
 ```sh
-cd my-turborepo
-turbo dev
+pnpm install
+pnpm dev
 ```
 
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo dev
-pnpm exec turbo dev
-pnpm exec turbo dev
-```
-
-You can develop a specific package by using a [filter](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters):
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo dev --filter=web
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-pnpm exec turbo dev --filter=web
-```
-
-### Remote Caching
-
-> [!TIP]
-> Vercel Remote Cache is free for all plans. Get started today at [vercel.com](https://vercel.com/signup?utm_source=remote-cache-sdk&utm_campaign=free_remote_cache).
-
-Turborepo can use a technique known as [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching) to share cache artifacts across machines, enabling you to share build caches with your team and CI/CD pipelines.
-
-By default, Turborepo will cache locally. To enable Remote Caching you will need an account with Vercel. If you don't have an account you can [create one](https://vercel.com/signup?utm_source=turborepo-examples), then enter the following commands:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed (recommended):
-
-```sh
-cd my-turborepo
-turbo login
-```
-
-Without global `turbo`, use your package manager:
-
-```sh
-cd my-turborepo
-npx turbo login
-pnpm exec turbo login
-pnpm exec turbo login
-```
-
-This will authenticate the Turborepo CLI with your [Vercel account](https://vercel.com/docs/concepts/personal-accounts/overview).
-
-Next, you can link your Turborepo to your Remote Cache by running the following command from the root of your Turborepo:
-
-With [global `turbo`](https://turborepo.dev/docs/getting-started/installation#global-installation) installed:
-
-```sh
-turbo link
-```
-
-Without global `turbo`:
-
-```sh
-npx turbo link
-pnpm exec turbo link
-pnpm exec turbo link
-```
-
-## Useful Links
-
-Learn more about the power of Turborepo:
-
-- [Tasks](https://turborepo.dev/docs/crafting-your-repository/running-tasks)
-- [Caching](https://turborepo.dev/docs/crafting-your-repository/caching)
-- [Remote Caching](https://turborepo.dev/docs/core-concepts/remote-caching)
-- [Filtering](https://turborepo.dev/docs/crafting-your-repository/running-tasks#using-filters)
-- [Configuration Options](https://turborepo.dev/docs/reference/configuration)
-- [CLI Usage](https://turborepo.dev/docs/reference/command-line-reference)
+Copy `.env.example` to `.env` at the repo root. Voice needs LiveKit Cloud keys (`LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_URL`). Neon is `DATABASE_URL` in that same file.

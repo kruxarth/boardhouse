@@ -1,0 +1,26 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Room {
+  id                  String   @id @default(cuid())
+  slug                String   @unique
+  hostKey             String   @unique
+  hostParticipantId   String
+  hostName            String   @default("")
+  accessMode          String
+  name                String?
+  formerSlugs         String[] @default([])
+  createdAt           DateTime @default(now())
+  expiresAt           DateTime
+
+  @@index([expiresAt])
+}

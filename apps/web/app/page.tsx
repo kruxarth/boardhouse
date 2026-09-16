@@ -1,102 +1,257 @@
-import Image, { type ImageProps } from "next/image";
-import { Button } from "@repo/ui/button";
-import styles from "./page.module.css";
+"use client";
 
-type Props = Omit<ImageProps, "src"> & {
-  srcLight: string;
-  srcDark: string;
-};
-
-const ThemeImage = (props: Props) => {
-  const { srcLight, srcDark, ...rest } = props;
-
-  return (
-    <>
-      <Image {...rest} src={srcLight} className="imgLight" />
-      <Image {...rest} src={srcDark} className="imgDark" />
-    </>
-  );
-};
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import { RoofArt, SkyArt } from "../components/HouseArt";
+import { HouseWindow } from "../components/HouseWindow";
+import { NameGate } from "../components/NameGate";
+import { useLocalSession } from "../hooks/useLocalSession";
+import { createRoom, createSession, fetchOccupancy, type Occupancy } from "../lib/api";
+import { rememberHostKey } from "../lib/session";
 
 export default function Home() {
-  return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <ThemeImage
-          className={styles.logo}
-          srcLight="turborepo-dark.svg"
-          srcDark="turborepo-light.svg"
-          alt="Turborepo logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol>
-          <li>
-            Get started by editing <code>apps/web/app/page.tsx</code>
-          </li>
-          <li>Save and see your changes instantly.</li>
-        </ol>
+    const router = useRouter();
+    const { session, setSession, ready } = useLocalSession();
+    const [occupancy, setOccupancy] = useState<Occupancy | null>(null);
+    const [label, setLabel] = useState("");
+    const [link, setLink] = useState("");
+    const [error, setError] = useState("");
+    const [pending, setPending] = useState(false);
+    const [claiming, setClaiming] = useState(false);
 
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new/clone?demo-description=Learn+to+implement+a+monorepo+with+a+two+Next.js+sites+that+has+installed+three+local+packages.&demo-image=%2F%2Fimages.ctfassets.net%2Fe5382hct74si%2F4K8ZISWAzJ8X1504ca0zmC%2F0b21a1c6246add355e55816278ef54bc%2FBasic.png&demo-title=Monorepo+with+Turborepo&demo-url=https%3A%2F%2Fexamples-basic-web.vercel.sh%2F&from=templates&project-name=Monorepo+with+Turborepo&repository-name=monorepo-turborepo&repository-url=https%3A%2F%2Fgithub.com%2Fvercel%2Fturborepo%2Ftree%2Fmain%2Fexamples%2Fbasic&root-directory=apps%2Fdocs&skippable-integrations=1&teamSlug=vercel&utm_source=create-turbo"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
-            />
-            Deploy now
-          </a>
-          <a
-            href="https://turborepo.dev/docs?utm_source"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={styles.secondary}
-          >
-            Read our docs
-          </a>
+    useEffect(() => {
+        let cancelled = false;
+        async function load() {
+            try {
+                const next = await fetchOccupancy();
+                if (!cancelled) {
+                    setOccupancy(next);
+                }
+            } catch {
+                if (!cancelled) {
+                    setOccupancy(null);
+                }
+            }
+        }
+        void load();
+        const timer = window.setInterval(() => void load(), 8_000);
+        return () => {
+            cancelled = true;
+            window.clearInterval(timer);
+        };
+    }, []);
+
+    const houseFull = occupancy !== null && occupancy.used >= occupancy.max;
+    const tables = occupancy?.tables ?? null;
+
+    async function openTable(name?: string) {
+        setError("");
+        setPending(true);
+        try {
+            const nextSession = session ?? (await createSession(name ?? ""));
+            if (!session) {
+                setSession(nextSession);
+            }
+            const room = await createRoom(nextSession.token, label.trim() || undefined);
+            rememberHostKey(room.slug, room.hostKey);
+            router.push(room.hostPath);
+        } catch (err) {
+            const message = err instanceof Error ? err.message : "Could not open a table";
+            setError(message === "Name required" ? "Tell us what to call you" : message);
+            if (message === "House is full") {
+                const next = await fetchOccupancy().catch(() => occupancy);
+                if (next) {
+                    setOccupancy(next);
+                }
+            }
+            setClaiming(false);
+        } finally {
+            setPending(false);
+        }
+    }
+
+    function onEmptyTable() {
+        if (houseFull || pending) {
+            return;
+        }
+        if (!session) {
+            setClaiming(true);
+            return;
+        }
+        void openTable();
+    }
+
+    function openLink(event: React.FormEvent) {
+        event.preventDefault();
+        const trimmed = link.trim();
+        if (!trimmed) {
+            return;
+        }
+        try {
+            const url = trimmed.includes("://")
+                ? new URL(trimmed)
+                : new URL(trimmed, window.location.origin);
+            const parts = url.pathname.split("/").filter(Boolean);
+            const roomIndex = parts.indexOf("room");
+            const slug = roomIndex >= 0 ? parts[roomIndex + 1] : parts[0];
+            if (!slug) {
+                setError("That is not a table link");
+                return;
+            }
+            const host = url.searchParams.get("host");
+            router.push(host ? `/room/${slug}?host=${host}` : `/room/${slug}`);
+        } catch {
+            router.push(`/room/${trimmed}`);
+        }
+    }
+
+    function renderFloor(from: number, to: number) {
+        return (
+            <ol className="floor">
+                {tables
+                    ? tables.slice(from, to).map((table, offset) => {
+                          const index = from + offset + 1;
+                          return (
+                              <li key={table.empty ? `empty-${index}` : table.slug}>
+                                  <HouseWindow
+                                      index={index}
+                                      table={table}
+                                      disabled={pending || !ready}
+                                      onEmpty={onEmptyTable}
+                                      onOccupied={(slug) => router.push(`/room/${slug}`)}
+                                  />
+                              </li>
+                          );
+                      })
+                    : Array.from({ length: to - from }, (_, offset) => (
+                          <li key={`wait-${from + offset}`}>
+                              <div className="window window-dark window-wait" />
+                          </li>
+                      ))}
+            </ol>
+        );
+    }
+
+    return (
+        <div className="house">
+            <header className="house-lintel">
+                <div>
+                    <h1 className="house-sign">board-house</h1>
+                    <p className="lede">Ten tables. Closed doors. One day.</p>
+                </div>
+                <p className="plate">{occupancy ? `${occupancy.used} / ${occupancy.max}` : "— / 10"}</p>
+            </header>
+
+            {error ? <p className="error">{error}</p> : null}
+
+            <main className="scene">
+                <SkyArt />
+                <div className="dwelling">
+                    <RoofArt />
+                    <div className="facade">
+                        {renderFloor(0, 4)}
+                        {renderFloor(4, 8)}
+                        <div className="ground">
+                            <ol className="floor floor-ground">
+                                {tables
+                                    ? tables.slice(8, 10).map((table, offset) => {
+                                          const index = 8 + offset + 1;
+                                          return (
+                                              <li key={table.empty ? `empty-${index}` : table.slug}>
+                                                  <HouseWindow
+                                                      index={index}
+                                                      table={table}
+                                                      disabled={pending || !ready}
+                                                      onEmpty={onEmptyTable}
+                                                      onOccupied={(slug) => router.push(`/room/${slug}`)}
+                                                  />
+                                              </li>
+                                          );
+                                      })
+                                    : Array.from({ length: 2 }, (_, offset) => (
+                                          <li key={`wait-${8 + offset}`}>
+                                              <div className="window window-dark window-wait" />
+                                          </li>
+                                      ))}
+                            </ol>
+                            <div className="frontdoor">
+                                <div className="frontdoor-arch">
+                                    <span className="knob" aria-hidden="true" />
+                                    {ready && claiming && !session ? (
+                                        <>
+                                            <NameGate
+                                                title="What should we call you?"
+                                                submitLabel="Sit down"
+                                                pending={pending}
+                                                onSubmit={(name) => void openTable(name)}
+                                            />
+                                            <button
+                                                className="btn btn-ghost"
+                                                onClick={() => setClaiming(false)}
+                                                type="button"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <p className="frontdoor-kicker">The front door</p>
+                                            {houseFull ? (
+                                                <p className="vacancy-tag">Full house</p>
+                                            ) : null}
+                                            <form className="frontdoor-form" onSubmit={openLink}>
+                                                <input
+                                                    className="field"
+                                                    onChange={(event) => setLink(event.target.value)}
+                                                    placeholder="Paste a table link"
+                                                    value={link}
+                                                />
+                                                <button className="btn btn-ghost" type="submit">
+                                                    Walk in
+                                                </button>
+                                            </form>
+                                            {ready && session && !houseFull ? (
+                                                <div className="frontdoor-claim">
+                                                    <input
+                                                        className="field"
+                                                        maxLength={40}
+                                                        onChange={(event) => setLabel(event.target.value)}
+                                                        placeholder="Name this table, if you want"
+                                                        value={label}
+                                                    />
+                                                    <p className="frontdoor-hint">
+                                                        Then pick a dark window.
+                                                    </p>
+                                                </div>
+                                            ) : null}
+                                            {!session && !houseFull ? (
+                                                <p className="frontdoor-hint">
+                                                    No key? Pick a dark window and sit down.
+                                                </p>
+                                            ) : null}
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div className="street" aria-hidden="true" />
+                </div>
+                {tables ? null : (
+                    <p className="scene-wait" role="status">
+                        The house is waking up.
+                    </p>
+                )}
+            </main>
+
+            <footer>
+                <ul className="house-rules">
+                    <li>Ten seats at a table. No spectators.</li>
+                    <li>Two markers move. Everyone else points.</li>
+                    <li>Mics work like a call. The host can mute you; only you unmute yourself.</li>
+                    <li>Every table is wiped at twenty-four hours. Take the replay with you.</li>
+                </ul>
+            </footer>
         </div>
-        <Button appName="web" className={styles.secondary}>
-          Open alert
-        </Button>
-      </main>
-      <footer className={styles.footer}>
-        <a
-          href="https://vercel.com/templates?search=turborepo&utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          href="https://turborepo.dev?utm_source=create-turbo"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to turborepo.dev →
-        </a>
-      </footer>
-    </div>
-  );
+    );
 }

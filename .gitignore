@@ -36,3 +36,10 @@ yarn-error.log*
 # Misc
 .DS_Store
 *.pem
+
+# Local dumps and vendor agent skills
+sih_2026_filtered_226_ps.json
+packages/db/.agents/
+packages/db/.claude/
+packages/db/.windsurf/
+packages/db/skills-lock.json

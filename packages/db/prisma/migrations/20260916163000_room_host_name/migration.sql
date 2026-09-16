@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Room" ADD COLUMN "hostName" TEXT NOT NULL DEFAULT '';
