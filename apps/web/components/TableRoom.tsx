@@ -59,7 +59,7 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
     const [toast, setToast] = useState<string | null>(null);
     const [namePending, setNamePending] = useState(false);
     const hostKey = hostKeyFromUrl || (ready ? readHostKey(slug) : null);
-    const { socket, loading } = useSocket(session?.token ?? null);
+    const { socket, loading, failed } = useSocket(session?.token ?? null);
     const joined = door === "joined";
     const voice = useVoice({
         enabled: joined,
@@ -88,6 +88,13 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
         return () => window.clearInterval(timer);
     }, []);
+
+    useEffect(() => {
+        if (failed) {
+            setDoor("error");
+            setDoorMessage("Could not reach the table line.");
+        }
+    }, [failed]);
 
     useEffect(() => {
         if (!ready) {

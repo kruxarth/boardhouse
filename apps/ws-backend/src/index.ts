@@ -29,7 +29,7 @@ import {
 const port = Number(process.env.PORT) || 8081;
 const httpServer = createServer((req, res) => {
     const path = req.url?.split("?")[0];
-    if (path === "/health" || path === "/") {
+    if (path === "/health") {
         res.writeHead(200, { "content-type": "text/plain" });
         res.end("ok");
         return;
@@ -37,7 +37,13 @@ const httpServer = createServer((req, res) => {
     res.writeHead(404);
     res.end();
 });
-const wss = new WebSocketServer({ server: httpServer });
+const wss = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (request, socket, head) => {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+        wss.emit("connection", ws, request);
+    });
+});
 
 type Session = {
     participantId: string;
