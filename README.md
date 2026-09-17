@@ -2,63 +2,45 @@
 
 Ten tables. Closed doors. One day.
 
-A private room for up to ten people to draw, talk, and leave with a replay. There are only ten rooms on the whole service. When they’re taken, you wait. When twenty-four hours pass, the room is deleted.
+board-house is a house with ten tables. Each table is a sitting: up to ten people draw on one board, talk in the same tab, and leave. After twenty-four hours the table is wiped.
 
-It is not a document you keep. It is a sitting.
-
-## Why this, and not Excalidraw
-
-Excalidraw is a file. You open a board, you share a URL, you treat the drawing as something that should still be there next month. That’s the right product for “I need a diagram.”
-
-board-house is for the other job: a conversation that needs a whiteboard, and then needs to be over.
-
-**A closed door.** Rooms are not listed. No lobby, no thumbnails, no “who’s drawing.” You get in because the host admits you, or because they handed you a key. A leaked link does not have to stay an invitation — the host can put the door back on.
-
-**A group, not an audience.** Ten people. No spectators, no accounts. If you’re in, you can talk, export, and try for a marker. If you’re not admitted, you see a door.
-
-**Two markers.** Like hosting a call while someone shares a board: one person presents, one annotates. A free marker you pick up. An occupied one you ask that person for. The host can take it off you, the way a Meet host stops a share. Everyone else points. Nobody else draws.
-
-**Voice in the same tab.** Meet-style mute: click on, click off. Host can mute you; only you can unmute yourself. Audio is LiveKit, not our websocket.
-
-**The board is supposed to die.** Twenty-four hours, then it’s gone from the server. Anyone at the table can export the replay. If nobody does, it didn’t happen.
-
-**Ten tables, total.** The only public number is occupancy: `3 / 10`. When the house is full, the house is full.
+You pick a name. There is no account. If a table is free, you sit down and host. Everyone else knocks, or comes in with a guest link the host has made open.
 
 ## A sitting
 
-1. You pick a display name. There is no signup.
-2. Host opens a table, if one of the ten is free. They get a guest link and a host link.
-3. Default is **knock**. People wait; the host admits or denies. Host can switch to **open link** (the URL is the key until the table is full) and can rotate that key.
-4. Ten seats. Full means full, even with the key.
-5. Two markers. Host starts with Marker one; Marker two sits on the table.
-6. Mic toggles like Meet. Host may mute, never unmute someone else.
-7. Anyone inside can download the replay.
-8. At twenty-four hours the table is wiped.
+The house floor shows all ten tables. Occupied ones name the sitting and the host. Empty ones say sit here.
 
-## The rules
+The host gets a guest link and a host link. Knock is the default: people wait at the door until the host admits or denies them. The host can switch to an open link, change the guest URL so old links have to knock, or end the sitting early.
+
+Ten seats. When they are taken, nobody else gets in.
+
+Two markers. The host starts with Marker one. Marker two sits on the table. A free marker you take. An occupied one you ask that person for; they give or keep it. The host can take a marker or hand it to someone. Everyone else still has a cursor and a laser. Only the two holders draw.
+
+Voice is in the tab. Click the mic on, click it off. The host can mute someone; only that person can unmute themselves.
+
+Anyone at the table can export a replay of the board. At twenty-four hours the sitting is gone, unless the host wiped it sooner.
+
+## The house
 
 | | |
 | --- | --- |
-| 10 rooms on the service | A place, not a cloud. When it’s full, it’s full. |
-| 10 people per room | A discussion. Not a stream. |
-| No spectators | An audience changes how people draw. |
-| No accounts | A name and a link, like a call. |
-| Knock, or a key | Privacy is the default. |
+| 10 tables | The house is full when they are all taken. |
+| 10 people at a table | A discussion. |
+| No spectators | If you are in, you can talk, export, and try for a marker. |
+| No accounts | A display name and a link. |
+| Knock, or an open link | The host chooses the door. |
 | Two markers | Pair on the board. Everyone else points. |
-| Meet-style mute | Click to talk. Host can mute; only you unmute yourself. |
-| 24 hours | A sitting, not an asset. |
-| Anyone inside can export | You’re already in the room. |
+| Mic toggle | Host may mute. You unmute yourself. |
+| 24 hours | Then the table is empty again. |
+| Export | Anyone inside can take the replay with them. |
 
 ## Repo
 
-- `README.md` — this (why)
-- `implementation.md` — engineering source of truth for agents and implementers (how, what’s already built, what to rip out)
+- `implementation.md` — engineering contract
 - `apps/web` — Next.js client
 - `apps/http-backend` — HTTP API
 - `apps/ws-backend` — live room events (not audio)
-- `packages/db` — Neon/Postgres for room metadata, not every stroke
-
-The product is board-house. See `implementation.md` for the contract.
+- `packages/db` — Neon/Postgres for room metadata, not strokes
 
 ## Run it
 

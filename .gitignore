@@ -43,3 +43,5 @@ packages/db/.agents/
 packages/db/.claude/
 packages/db/.windsurf/
 packages/db/skills-lock.json
+
+sih_2026_filtered_226_ps.json
