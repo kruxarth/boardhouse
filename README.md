@@ -36,7 +36,6 @@ Anyone at the table can export a replay of the board. At twenty-four hours the s
 
 ## Repo
 
-- `implementation.md` — engineering contract
 - `apps/web` — Next.js client
 - `apps/http-backend` — HTTP API
 - `apps/ws-backend` — live room events (not audio)
