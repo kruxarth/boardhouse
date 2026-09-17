@@ -13,6 +13,7 @@ export default function Home() {
     const router = useRouter();
     const { session, setSession, ready } = useLocalSession();
     const [occupancy, setOccupancy] = useState<Occupancy | null>(null);
+    const [houseDown, setHouseDown] = useState(false);
     const [label, setLabel] = useState("");
     const [link, setLink] = useState("");
     const [error, setError] = useState("");
@@ -26,10 +27,12 @@ export default function Home() {
                 const next = await fetchOccupancy();
                 if (!cancelled) {
                     setOccupancy(next);
+                    setHouseDown(false);
                 }
             } catch {
                 if (!cancelled) {
                     setOccupancy(null);
+                    setHouseDown(true);
                 }
             }
         }
@@ -239,7 +242,9 @@ export default function Home() {
                 </div>
                 {tables ? null : (
                     <p className="scene-wait" role="status">
-                        The house is waking up.
+                        {houseDown
+                            ? "The house is locked from this site. Check FRONTEND_URL on HTTP, then reload."
+                            : "The house is waking up."}
                     </p>
                 )}
             </main>

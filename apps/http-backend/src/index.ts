@@ -18,9 +18,51 @@ import {
     wipeExpiredRooms,
 } from "./rooms";
 
+function allowedOrigins() {
+    const extra = (process.env.FRONTEND_URL ?? "")
+        .split(",")
+        .map((origin) => origin.trim().replace(/\/$/, ""))
+        .filter(Boolean);
+    return [
+        ...new Set([
+            "http://localhost:3000",
+            "https://board-house.vercel.app",
+            ...extra,
+        ]),
+    ];
+}
+
+function isAllowedOrigin(origin: string | undefined) {
+    if (!origin) {
+        return true;
+    }
+    if (allowedOrigins().includes(origin)) {
+        return true;
+    }
+    try {
+        const host = new URL(origin).hostname;
+        return (
+            host === "board-house.vercel.app" ||
+            (host.startsWith("board-house-") && host.endsWith(".vercel.app"))
+        );
+    } catch {
+        return false;
+    }
+}
+
 const app = express();
-app.use(cors({ origin: "http://localhost:3000" }));
+app.use(
+    cors({
+        origin(origin, callback) {
+            callback(null, isAllowedOrigin(origin));
+        },
+    })
+);
 app.use(express.json());
+
+app.get("/health", (_req, res) => {
+    res.status(200).send("ok");
+});
 
 const WIPE_MS = 30_000;
 setInterval(() => {
@@ -204,6 +246,7 @@ app.get("/livekit-token", middleware, async (req, res) => {
     }
 });
 
-app.listen(8080, () => {
-    console.log("HTTP backend running on http://localhost:8080");
+const port = Number(process.env.PORT) || 8080;
+app.listen(port, "0.0.0.0", () => {
+    console.log(`HTTP backend running on ${port}`);
 });

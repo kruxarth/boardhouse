@@ -1,3 +1,4 @@
+import { createServer } from "http";
 import { randomUUID } from "crypto";
 import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -25,7 +26,18 @@ import {
     type Seat,
 } from "./store";
 
-const wss = new WebSocketServer({ port: 8081 });
+const port = Number(process.env.PORT) || 8081;
+const httpServer = createServer((req, res) => {
+    const path = req.url?.split("?")[0];
+    if (path === "/health" || path === "/") {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("ok");
+        return;
+    }
+    res.writeHead(404);
+    res.end();
+});
+const wss = new WebSocketServer({ server: httpServer });
 
 type Session = {
     participantId: string;
@@ -723,8 +735,8 @@ async function handleMessage(connection: Connection, data: RawData) {
 
 const connections = new Set<Connection>();
 
-wss.on("listening", () => {
-    console.log("WebSocket backend running on ws://localhost:8081");
+httpServer.listen(port, "0.0.0.0", () => {
+    console.log(`WebSocket backend running on ${port}`);
 });
 
 wss.on("connection", (ws, request) => {
