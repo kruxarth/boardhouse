@@ -7,7 +7,7 @@ import { useLocalSession } from "../hooks/useLocalSession";
 import { useSocket } from "../hooks/useSocket";
 import { useVoice } from "../hooks/useVoice";
 import { createSession, fetchRoom } from "../lib/api";
-import { rememberHostKey, readHostKey } from "../lib/session";
+import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import type { RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
@@ -166,8 +166,12 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             }
             if (event.code === 1008) {
                 settled = true;
+                clearSession();
+                setSession(null);
                 setDoor("error");
-                setDoorMessage("This session is not valid. Refresh and sit down again.");
+                setDoorMessage(
+                    "That session was rejected. Head back and sit down again with a fresh name."
+                );
                 return;
             }
             if (event.code === 4001) {
@@ -197,8 +201,12 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             }
             if (type === "auth_error") {
                 settled = true;
+                clearSession();
+                setSession(null);
                 setDoor("error");
-                setDoorMessage(String(message.message ?? "This session is not valid."));
+                setDoorMessage(
+                    "That session was rejected. Head back and sit down again with a fresh name."
+                );
                 return;
             }
             if (type === "joined") {
@@ -340,7 +348,7 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             ws.removeEventListener("close", onClose);
             ws.onmessage = null;
         };
-    }, [socket, loading, session, slug, hostKey, router]);
+    }, [socket, loading, session, slug, hostKey, router, setSession]);
 
     useEffect(() => {
         if (!toast) {

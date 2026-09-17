@@ -31,6 +31,22 @@ export function writeSession(session: Session) {
     localStorage.setItem(NAME_KEY, session.name);
 }
 
+export function clearSession() {
+    if (typeof window === "undefined") {
+        return;
+    }
+    for (const key of [
+        TOKEN_KEY,
+        ID_KEY,
+        NAME_KEY,
+        "boardhouse.token",
+        "boardhouse.participantId",
+        "boardhouse.name",
+    ]) {
+        localStorage.removeItem(key);
+    }
+}
+
 export function hostStorageKey(slug: string) {
     return `board-house.hostKey.${slug}`;
 }
