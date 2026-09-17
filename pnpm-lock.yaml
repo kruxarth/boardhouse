@@ -81,6 +81,9 @@ importers:
       livekit-server-sdk:
         specifier: ^2.15.0
         version: 2.19.0
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
     devDependencies:
       '@types/cors':
         specifier: ^2.8.19
@@ -94,9 +97,6 @@ importers:
       '@types/node':
         specifier: ^22.15.3
         version: 22.15.3
-      tsx:
-        specifier: ^4.23.12
-        version: 4.23.12
 
   apps/web:
     dependencies:
@@ -173,6 +173,9 @@ importers:
       livekit-server-sdk:
         specifier: ^2.15.0
         version: 2.19.0
+      tsx:
+        specifier: ^4.23.12
+        version: 4.23.12
       ws:
         specifier: ^8.21.1
         version: 8.21.1
@@ -186,9 +189,6 @@ importers:
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
-      tsx:
-        specifier: ^4.23.12
-        version: 4.23.12
 
   packages/backend-common:
     dependencies:
