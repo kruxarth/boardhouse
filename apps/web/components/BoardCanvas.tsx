@@ -1,13 +1,36 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { MAX_CANVAS_MESSAGE_BYTES } from "@repo/common/constants";
 import { throttle } from "../lib/throttle";
 
 import "@excalidraw/excalidraw/index.css";
 
+type ExcalidrawApi = {
+    updateScene: (scene: Record<string, unknown>) => void;
+    addFiles: (files: unknown) => void;
+    setActiveTool: (tool: { type: string }) => void;
+    getSceneElementsIncludingDeleted: () => readonly unknown[];
+    getFiles: () => Record<string, unknown>;
+    getAppState: () => unknown;
+};
+
+type ReconcileElements = (
+    localElements: readonly unknown[],
+    remoteElements: readonly unknown[],
+    localAppState: unknown
+) => unknown[];
+
+const excalidrawLib: { reconcile: ReconcileElements | null } = { reconcile: null };
+
 const Excalidraw = dynamic(
-    async () => (await import("@excalidraw/excalidraw")).Excalidraw,
+    async () => {
+        const mod = await import("@excalidraw/excalidraw");
+        excalidrawLib.reconcile =
+            mod.reconcileElements as unknown as ReconcileElements;
+        return mod.Excalidraw;
+    },
     { ssr: false }
 );
 
@@ -21,7 +44,7 @@ export type RemoteCursor = {
     drawing?: boolean;
 };
 
-const MAX_SCENE_BYTES = 1_500_000;
+const MAX_SCENE_BYTES = MAX_CANVAS_MESSAGE_BYTES - 64;
 
 export const MARKER_INK = ["#f386a1", "#1e1e1e"] as const;
 
@@ -35,6 +58,14 @@ function scenePayload(elements: unknown, files: unknown) {
         // fall through to elements-only
     }
     return { elements };
+}
+
+function serializeScene(elements: unknown, files: unknown) {
+    try {
+        return JSON.stringify({ elements, files });
+    } catch {
+        return "";
+    }
 }
 
 export function BoardCanvas({
@@ -56,13 +87,11 @@ export function BoardCanvas({
     onScene: (payload: unknown) => void;
     onCursor: (x: number, y: number) => void;
 }) {
-    const apiRef = useRef<{
-        updateScene: (scene: Record<string, unknown>) => void;
-        addFiles: (files: unknown) => void;
-        setActiveTool: (tool: { type: string }) => void;
-    } | null>(null);
+    const apiRef = useRef<ExcalidrawApi | null>(null);
+    const [apiReady, setApiReady] = useState(false);
     const applyingRef = useRef(false);
-    const lastSentRef = useRef("");
+    const hydratedRef = useRef(false);
+    const lastSceneRef = useRef("");
     const onSceneRef = useRef(onScene);
     const onCursorRef = useRef(onCursor);
     onSceneRef.current = onScene;
@@ -85,18 +114,39 @@ export function BoardCanvas({
     );
 
     const applyScene = useCallback((payload: unknown) => {
-        if (!apiRef.current || !payload || typeof payload !== "object") {
+        const api = apiRef.current;
+        if (!api || !payload || typeof payload !== "object") {
             return;
         }
-        const scene = payload as { elements?: unknown; files?: Record<string, unknown> };
-        applyingRef.current = true;
+        const scene = payload as {
+            elements?: unknown;
+            files?: Record<string, unknown>;
+        };
         if (scene.files) {
-            apiRef.current.addFiles(Object.values(scene.files));
+            const files = Object.values(scene.files);
+            if (files.length > 0) {
+                api.addFiles(files);
+            }
         }
-        apiRef.current.updateScene({
-            elements: scene.elements ?? payload,
+        applyingRef.current = true;
+        const remoteElements = Array.isArray(scene.elements) ? scene.elements : null;
+        const reconcile = excalidrawLib.reconcile;
+        const elements =
+            remoteElements && reconcile
+                ? reconcile(
+                      api.getSceneElementsIncludingDeleted(),
+                      remoteElements,
+                      api.getAppState()
+                  )
+                : (scene.elements ?? payload);
+        api.updateScene({
+            elements,
             captureUpdate: "NEVER",
         });
+        lastSceneRef.current = serializeScene(
+            scene.elements ?? payload,
+            api.getFiles()
+        );
         window.setTimeout(() => {
             applyingRef.current = false;
         }, 0);
@@ -123,24 +173,66 @@ export function BoardCanvas({
         });
     }, []);
 
-    useEffect(() => {
-        if (snapshot) {
-            applyScene(snapshot);
-        }
-    }, [snapshot, applyScene]);
+    const unmountedRef = useRef(false);
 
     useEffect(() => {
-        if (remoteScene) {
-            applyScene(remoteScene);
-        }
-    }, [remoteScene, applyScene]);
+        unmountedRef.current = false;
+        return () => {
+            unmountedRef.current = true;
+        };
+    }, []);
+
+    const applyWhenReady = useCallback(
+        (payload: unknown) => {
+            const attempt = () => {
+                if (unmountedRef.current) {
+                    return;
+                }
+                const api = apiRef.current;
+                const appState = api?.getAppState() as { isLoading?: boolean } | undefined;
+                if (!api || appState?.isLoading !== false) {
+                    window.setTimeout(attempt, 50);
+                    return;
+                }
+                applyScene(payload);
+                hydratedRef.current = true;
+            };
+            attempt();
+        },
+        [applyScene]
+    );
 
     useEffect(() => {
-        if (!apiRef.current) {
+        if (!snapshot) {
+            return;
+        }
+        applyWhenReady(snapshot);
+    }, [snapshot, applyWhenReady]);
+
+    useEffect(() => {
+        if (!remoteScene) {
+            return;
+        }
+        applyWhenReady(remoteScene);
+    }, [remoteScene, applyWhenReady]);
+
+    const cursorsKey = useMemo(
+        () =>
+            cursors
+                .map((cursor) => `${cursor.id}:${cursor.x}:${cursor.y}:${cursor.drawing ? 1 : 0}`)
+                .join("|"),
+        [cursors]
+    );
+    const cursorsRef = useRef(cursors);
+    cursorsRef.current = cursors;
+
+    useEffect(() => {
+        const api = apiRef.current;
+        if (!apiReady || !api) {
             return;
         }
         const collaborators = new Map();
-        for (const cursor of cursors) {
+        for (const cursor of cursorsRef.current) {
             collaborators.set(cursor.id, {
                 username: cursor.name,
                 pointer: {
@@ -150,27 +242,36 @@ export function BoardCanvas({
                 },
             });
         }
-        apiRef.current.updateScene({ collaborators });
-    }, [cursors]);
+        applyingRef.current = true;
+        api.updateScene({ collaborators });
+        window.setTimeout(() => {
+            applyingRef.current = false;
+        }, 0);
+    }, [apiReady, cursorsKey]);
 
     useEffect(() => {
-        const timer = window.setTimeout(() => {
-            syncTool(canDraw, allowLaser);
-            syncInk(markerSlot);
-            apiRef.current?.updateScene({
-                appState: { viewBackgroundColor: "#ffffff" },
-                captureUpdate: "NEVER",
-            });
+        if (!apiReady) {
+            return;
+        }
+        syncTool(canDraw, allowLaser);
+        syncInk(markerSlot);
+        applyingRef.current = true;
+        apiRef.current?.updateScene({
+            appState: { viewBackgroundColor: "#ffffff" },
+            captureUpdate: "NEVER",
+        });
+        window.setTimeout(() => {
+            applyingRef.current = false;
         }, 0);
-        return () => window.clearTimeout(timer);
-    }, [canDraw, allowLaser, markerSlot, syncTool, syncInk]);
+    }, [apiReady, canDraw, allowLaser, markerSlot, syncTool, syncInk]);
 
     return (
         <div className="board-frame">
             <Excalidraw
                 name="board-house"
                 excalidrawAPI={(api) => {
-                    apiRef.current = api as typeof apiRef.current;
+                    apiRef.current = api as unknown as ExcalidrawApi;
+                    setApiReady(true);
                 }}
                 isCollaborating
                 viewModeEnabled={!canDraw}
@@ -194,15 +295,15 @@ export function BoardCanvas({
                     welcomeScreen: false,
                 }}
                 onChange={(elements: unknown, _appState: unknown, files: unknown) => {
-                    if (!canDraw || applyingRef.current) {
+                    if (!canDraw || !hydratedRef.current || applyingRef.current) {
                         return;
                     }
                     const payload = scenePayload(elements, files);
                     const serialized = JSON.stringify(payload);
-                    if (serialized === lastSentRef.current) {
+                    if (serialized === lastSceneRef.current) {
                         return;
                     }
-                    lastSentRef.current = serialized;
+                    lastSceneRef.current = serialized;
                     sendThrottled(payload);
                 }}
                 onPointerUpdate={(payload: { pointer?: Pointer }) => {

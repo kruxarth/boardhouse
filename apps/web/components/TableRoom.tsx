@@ -291,7 +291,7 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                 return;
             }
             if (type === "canvas_snapshot") {
-                setSnapshot(message.payload);
+                setSnapshot(message.payload ?? { elements: [], files: {} });
                 return;
             }
             if (type === "canvas") {

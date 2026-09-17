@@ -265,9 +265,7 @@ function admit(room: LiveRoom, connection: Connection) {
     sendJson(connection.ws, { type: "joined", slug: room.slug });
     sendJson(connection.ws, roomState(room, seat.participantId === room.hostParticipantId, false));
     sendJson(connection.ws, { type: "marker_state", slots: room.markers });
-    if (room.canvas) {
-        sendJson(connection.ws, { type: "canvas_snapshot", payload: room.canvas });
-    }
+    sendJson(connection.ws, { type: "canvas_snapshot", payload: room.canvas ?? null });
     broadcastAdmitted(
         room,
         {
