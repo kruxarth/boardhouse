@@ -133,6 +133,8 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
 
         const ws = socket;
         let settled = false;
+        let snapshotSeen = false;
+        let snapshotWatch: number | undefined;
         setDoor((current) =>
             current === "joined" || current === "waiting" || current === "need-name"
                 ? current
@@ -212,6 +214,11 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             if (type === "joined") {
                 settled = true;
                 setDoor("joined");
+                snapshotWatch = window.setTimeout(() => {
+                    if (!snapshotSeen) {
+                        setSnapshot({ elements: [], files: {} });
+                    }
+                }, 1500);
                 return;
             }
             if (type === "waiting") {
@@ -291,6 +298,11 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                 return;
             }
             if (type === "canvas_snapshot") {
+                snapshotSeen = true;
+                if (snapshotWatch) {
+                    window.clearTimeout(snapshotWatch);
+                    snapshotWatch = undefined;
+                }
                 setSnapshot(message.payload ?? { elements: [], files: {} });
                 return;
             }
@@ -345,6 +357,9 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
 
         return () => {
             window.clearTimeout(joinWatch);
+            if (snapshotWatch) {
+                window.clearTimeout(snapshotWatch);
+            }
             ws.removeEventListener("close", onClose);
             ws.onmessage = null;
         };
