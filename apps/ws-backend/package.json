@@ -17,6 +17,7 @@
     "@repo/common": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/typescript-config": "workspace:*",
+    "jsonwebtoken": "^9.0.3",
     "livekit-server-sdk": "^2.15.0",
     "tsx": "^4.23.12",
     "ws": "^8.21.1"

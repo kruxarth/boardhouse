@@ -1,6 +1,11 @@
 import { useEffect, useState } from "react";
 import { WS_BACKEND_URL } from "../app/config";
 
+function socketUrl(token: string) {
+    const base = WS_BACKEND_URL.replace(/\/$/, "");
+    return `${base}/?token=${encodeURIComponent(token)}`;
+}
+
 export function useSocket(token: string | null) {
     const [loading, setLoading] = useState(true);
     const [socket, setSocket] = useState<WebSocket | null>(null);
@@ -14,37 +19,65 @@ export function useSocket(token: string | null) {
             return;
         }
 
-        let opened = false;
-        const ws = new WebSocket(
-            `${WS_BACKEND_URL}?token=${encodeURIComponent(token)}`
-        );
+        let stopped = false;
+        let ws: WebSocket | null = null;
+        let attempt = 0;
+        let retryTimer: number | undefined;
+        const sessionToken = token;
 
-        ws.onopen = () => {
-            opened = true;
-            setFailed(false);
-            setLoading(false);
-            setSocket(ws);
-        };
-
-        ws.onerror = (error) => {
-            console.error("WebSocket error:", error);
-            if (!opened) {
-                setFailed(true);
-                setLoading(false);
+        function connect() {
+            if (stopped) {
+                return;
             }
-        };
 
-        ws.onclose = () => {
-            if (!opened) {
-                setFailed(true);
+            const next = new WebSocket(socketUrl(sessionToken));
+            ws = next;
+
+            next.addEventListener("open", () => {
+                if (stopped || ws !== next) {
+                    next.close();
+                    return;
+                }
+                attempt = 0;
+                setFailed(false);
                 setLoading(false);
-            }
-        };
+                setSocket(next);
+            });
+
+            next.addEventListener("close", (event) => {
+                setSocket((current) => (current === next ? null : current));
+                if (stopped) {
+                    return;
+                }
+                if (event.code === 1008 || event.code === 4000 || event.code === 4001) {
+                    // 1008: bad session (retrying won't help).
+                    // 4000: sitting wiped. 4001: replaced by another tab (must not fight it).
+                    setFailed(event.code === 1008);
+                    setLoading(false);
+                    return;
+                }
+                attempt += 1;
+                if (attempt > 5) {
+                    setFailed(true);
+                    setLoading(false);
+                    return;
+                }
+                setLoading(true);
+                retryTimer = window.setTimeout(connect, Math.min(800 * attempt, 4_000));
+            });
+        }
+
+        setLoading(true);
+        setFailed(false);
+        connect();
 
         return () => {
-            ws.close();
+            stopped = true;
+            if (retryTimer) {
+                window.clearTimeout(retryTimer);
+            }
+            ws?.close();
             setSocket(null);
-            setLoading(true);
         };
     }, [token]);
 

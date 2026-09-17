@@ -18,6 +18,7 @@ export const JoinMessageSchema = z.object({
     type: z.literal("join"),
     roomId: z.string().min(1).max(100),
     hostKey: z.string().min(1).max(200).optional(),
+    token: z.string().min(1).max(2000).optional(),
 });
 
 export const LeaveMessageSchema = z.object({

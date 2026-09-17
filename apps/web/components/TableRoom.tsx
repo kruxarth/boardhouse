@@ -132,23 +132,52 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
         }
 
         const ws = socket;
+        let settled = false;
+        setDoor((current) =>
+            current === "joined" || current === "waiting" || current === "need-name"
+                ? current
+                : "connecting"
+        );
 
         ws.send(
             JSON.stringify({
                 type: "join",
                 roomId: slug,
                 hostKey: hostKey || undefined,
+                token: session.token,
             })
         );
 
-        ws.onclose = (event) => {
-            if (event.code === 4000) {
+        const joinWatch = window.setTimeout(() => {
+            if (!settled) {
                 setDoor((current) =>
-                    current === "expired" ? current : "expired"
+                    current === "connecting" ? "error" : current
                 );
+                setDoorMessage((current) => current || "The table line went quiet.");
+            }
+        }, 10_000);
+
+        const onClose = (event: CloseEvent) => {
+            if (event.code === 4000) {
+                settled = true;
+                setDoor("expired");
                 setDoorMessage((current) => current || "This sitting is over");
+                return;
+            }
+            if (event.code === 1008) {
+                settled = true;
+                setDoor("error");
+                setDoorMessage("This session is not valid. Refresh and sit down again.");
+                return;
+            }
+            if (event.code === 4001) {
+                settled = true;
+                setDoor("error");
+                setDoorMessage("Connected from another tab. This window stepped out.");
             }
         };
+
+        ws.addEventListener("close", onClose);
 
         ws.onmessage = (event) => {
             let payload: unknown;
@@ -163,28 +192,43 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             const message = payload as Record<string, unknown>;
             const type = message.type;
 
+            if (type === "hello") {
+                return;
+            }
+            if (type === "auth_error") {
+                settled = true;
+                setDoor("error");
+                setDoorMessage(String(message.message ?? "This session is not valid."));
+                return;
+            }
             if (type === "joined") {
+                settled = true;
                 setDoor("joined");
                 return;
             }
             if (type === "waiting") {
+                settled = true;
                 setDoor("waiting");
                 return;
             }
             if (type === "denied") {
+                settled = true;
                 setDoor("denied");
                 return;
             }
             if (type === "full") {
+                settled = true;
                 setDoor("full");
                 return;
             }
             if (type === "expired") {
+                settled = true;
                 setDoor("expired");
                 setDoorMessage(String(message.message ?? ""));
                 return;
             }
             if (type === "missing") {
+                settled = true;
                 setDoor("missing");
                 return;
             }
@@ -278,8 +322,12 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                 return;
             }
             if (type === "error") {
-                setDoorMessage(String(message.message ?? ""));
-                setToast(String(message.message ?? "Error"));
+                const text = String(message.message ?? "Could not sit down");
+                setDoor((current) =>
+                    current === "joined" || current === "waiting" ? current : "error"
+                );
+                setDoorMessage(text);
+                setToast(text);
             }
         };
 
@@ -288,6 +336,8 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
         }
 
         return () => {
+            window.clearTimeout(joinWatch);
+            ws.removeEventListener("close", onClose);
             ws.onmessage = null;
         };
     }, [socket, loading, session, slug, hostKey, router]);
@@ -351,7 +401,7 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
         const copyForDoor = doorCopy(door === "joined" ? "connecting" : door);
         return (
             <DoorScreen title={copyForDoor.title} body={doorMessage || copyForDoor.body}>
-                {door === "denied" || door === "missing" || door === "expired" || door === "full" ? (
+                {door === "denied" || door === "missing" || door === "expired" || door === "full" || door === "error" ? (
                     <a className="btn btn-brass" href="/">
                         Back to the house
                     </a>

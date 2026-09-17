@@ -37,12 +37,9 @@ const httpServer = createServer((req, res) => {
     res.writeHead(404);
     res.end();
 });
-const wss = new WebSocketServer({ noServer: true });
-
-httpServer.on("upgrade", (request, socket, head) => {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit("connection", ws, request);
-    });
+const wss = new WebSocketServer({
+    server: httpServer,
+    perMessageDeflate: false,
 });
 
 type Session = {
@@ -52,7 +49,7 @@ type Session = {
 
 type Connection = {
     ws: WebSocket;
-    session: Session;
+    session: Session | null;
     room: LiveRoom | null;
     viaFormerSlug: boolean;
 };
@@ -186,11 +183,39 @@ function replaceExisting(room: LiveRoom, participantId: string, incoming: WebSoc
     }
 }
 
+function sessionOf(connection: Connection): Session {
+    if (!connection.session) {
+        throw new Error("unauthenticated");
+    }
+    return connection.session;
+}
+
+function authenticate(connection: Connection, token?: string): Session | null {
+    if (connection.session) {
+        return connection.session;
+    }
+    if (!token) {
+        sendJson(connection.ws, { type: "auth_error", message: "Missing token" });
+        return null;
+    }
+    const session = readSession(token);
+    if (!session) {
+        sendJson(connection.ws, { type: "auth_error", message: "Invalid token" });
+        return null;
+    }
+    connection.session = session;
+    return session;
+}
+
 function makeSeat(connection: Connection, admitted: boolean): Seat {
+    const session = connection.session;
+    if (!session) {
+        throw new Error("unauthenticated");
+    }
     return {
         ws: connection.ws,
-        participantId: connection.session.participantId,
-        name: connection.session.name,
+        participantId: session.participantId,
+        name: session.name,
         muted: true,
         admitted,
     };
@@ -230,8 +255,8 @@ async function loadRoom(slug: string) {
 }
 
 function admit(room: LiveRoom, connection: Connection) {
-    replaceExisting(room, connection.session.participantId, connection.ws);
-    room.waiting.delete(connection.session.participantId);
+    replaceExisting(room, sessionOf(connection).participantId, connection.ws);
+    room.waiting.delete(sessionOf(connection).participantId);
     const seat = makeSeat(connection, true);
     room.admitted.set(seat.participantId, seat);
     connection.room = room;
@@ -255,8 +280,8 @@ function admit(room: LiveRoom, connection: Connection) {
 }
 
 function putInWaiting(room: LiveRoom, connection: Connection, viaFormer: boolean) {
-    replaceExisting(room, connection.session.participantId, connection.ws);
-    if (room.waiting.size >= MAX_WAITERS && !room.waiting.has(connection.session.participantId)) {
+    replaceExisting(room, sessionOf(connection).participantId, connection.ws);
+    if (room.waiting.size >= MAX_WAITERS && !room.waiting.has(sessionOf(connection).participantId)) {
         sendJson(connection.ws, { type: "full", message: "Too many people at the door" });
         return;
     }
@@ -291,8 +316,20 @@ async function reclaimHost(room: LiveRoom, participantId: string) {
     });
 }
 
-async function handleJoin(connection: Connection, roomId: string, hostKey?: string) {
-    const loaded = await loadRoom(roomId);
+async function handleJoin(connection: Connection, roomId: string, hostKey?: string, token?: string) {
+    const session = authenticate(connection, token);
+    if (!session) {
+        return;
+    }
+
+    let loaded: Awaited<ReturnType<typeof loadRoom>>;
+    try {
+        loaded = await loadRoom(roomId);
+    } catch (error) {
+        console.error("Error loading room:", error);
+        sendError(connection.ws, "Could not open this table");
+        return;
+    }
     if (loaded === "missing") {
         sendJson(connection.ws, { type: "missing", message: "No table at this door" });
         return;
@@ -311,14 +348,14 @@ async function handleJoin(connection: Connection, roomId: string, hostKey?: stri
         }
 
         const validHostKey = Boolean(hostKey && hostKey === live.hostKey);
-        if (validHostKey && connection.session.participantId !== live.hostParticipantId) {
-            await reclaimHost(live, connection.session.participantId);
+        if (validHostKey && session.participantId !== live.hostParticipantId) {
+            await reclaimHost(live, session.participantId);
         }
 
-        const host = validHostKey || isHost(live, connection.session.participantId);
+        const host = validHostKey || isHost(live, session.participantId);
 
         if (host) {
-            if (!hostSeatOpen(live) && !live.admitted.has(connection.session.participantId)) {
+            if (!hostSeatOpen(live) && !live.admitted.has(session.participantId)) {
                 sendJson(connection.ws, { type: "full", message: "The table is full" });
                 return;
             }
@@ -326,7 +363,7 @@ async function handleJoin(connection: Connection, roomId: string, hostKey?: stri
             return;
         }
 
-        if (live.admitted.has(connection.session.participantId)) {
+        if (live.admitted.has(session.participantId)) {
             admit(live, connection);
             return;
         }
@@ -347,6 +384,11 @@ async function handleJoin(connection: Connection, roomId: string, hostKey?: stri
 }
 
 function requireAdmitted(connection: Connection): LiveRoom | null {
+    const session = connection.session;
+    if (!session) {
+        sendJson(connection.ws, { type: "auth_error", message: "Invalid token" });
+        return null;
+    }
     const room = connection.room;
     if (!room) {
         sendError(connection.ws, "Join a table first");
@@ -356,7 +398,7 @@ function requireAdmitted(connection: Connection): LiveRoom | null {
         closeSitting(room);
         return null;
     }
-    if (!room.admitted.has(connection.session.participantId)) {
+    if (!room.admitted.has(session.participantId)) {
         sendError(connection.ws, "You are not at the table");
         return null;
     }
@@ -365,10 +407,10 @@ function requireAdmitted(connection: Connection): LiveRoom | null {
 
 function requireHost(connection: Connection): LiveRoom | null {
     const room = requireAdmitted(connection);
-    if (!room) {
+    if (!room || !connection.session) {
         return null;
     }
-    if (!isHost(room, connection.session.participantId)) {
+    if (!isHost(room, sessionOf(connection).participantId)) {
         sendError(connection.ws, "Only the host can do that");
         return null;
     }
@@ -399,7 +441,12 @@ async function handleMessage(connection: Connection, data: RawData) {
     const message = parsed.data;
 
     if (message.type === "join") {
-        await handleJoin(connection, message.roomId, message.hostKey);
+        await handleJoin(connection, message.roomId, message.hostKey, message.token);
+        return;
+    }
+
+    if (!connection.session) {
+        sendJson(connection.ws, { type: "auth_error", message: "Invalid token" });
         return;
     }
 
@@ -414,11 +461,11 @@ async function handleMessage(connection: Connection, data: RawData) {
 
     if (message.type === "knock") {
         const room = connection.room;
-        if (!room || !room.waiting.has(connection.session.participantId)) {
+        if (!room || !room.waiting.has(sessionOf(connection).participantId)) {
             sendError(connection.ws, "You are not waiting at this door");
             return;
         }
-        const seat = room.waiting.get(connection.session.participantId);
+        const seat = room.waiting.get(sessionOf(connection).participantId);
         const host = room.admitted.get(room.hostParticipantId);
         if (seat && host) {
             sendJson(host.ws, { type: "knock", participant: presenceOf(seat) });
@@ -530,7 +577,7 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "That marker is already taken");
                 return;
             }
-            room.markers[message.slot] = connection.session.participantId;
+            room.markers[message.slot] = sessionOf(connection).participantId;
             broadcastMarkers(room);
             sendJson(connection.ws, {
                 type: "marker_ack",
@@ -550,18 +597,18 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "They do not have a marker");
                 return;
             }
-            if (holderId === connection.session.participantId) {
+            if (holderId === sessionOf(connection).participantId) {
                 sendError(connection.ws, "You already have that marker");
                 return;
             }
-            const ask = newAsk(connection.session.participantId, holderId, slot);
+            const ask = newAsk(sessionOf(connection).participantId, holderId, slot);
             room.asks.set(ask.requestId, ask);
             const holder = room.admitted.get(holderId);
             const payload = {
                 type: "marker_ask",
                 requestId: ask.requestId,
                 fromParticipantId: ask.fromParticipantId,
-                fromName: connection.session.name,
+                fromName: sessionOf(connection).name,
                 slot: ask.slot,
             };
             if (holder) {
@@ -580,7 +627,7 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "That ask is gone");
                 return;
             }
-            if (ask.holderId !== connection.session.participantId) {
+            if (ask.holderId !== sessionOf(connection).participantId) {
                 sendError(connection.ws, "That ask is not for you");
                 return;
             }
@@ -604,7 +651,7 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            if (room.markers[message.slot] !== connection.session.participantId) {
+            if (room.markers[message.slot] !== sessionOf(connection).participantId) {
                 sendError(connection.ws, "You are not holding that marker");
                 return;
             }
@@ -618,7 +665,7 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            if (room.markers[message.slot] !== connection.session.participantId) {
+            if (room.markers[message.slot] !== sessionOf(connection).participantId) {
                 sendError(connection.ws, "You are not holding that marker");
                 return;
             }
@@ -636,7 +683,7 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            room.markers[message.slot] = connection.session.participantId;
+            room.markers[message.slot] = sessionOf(connection).participantId;
             broadcastMarkers(room);
             return;
         }
@@ -660,7 +707,7 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            if (!holdsMarker(room, connection.session.participantId)) {
+            if (!holdsMarker(room, sessionOf(connection).participantId)) {
                 sendError(connection.ws, "Only marker holders can draw");
                 return;
             }
@@ -684,8 +731,8 @@ async function handleMessage(connection: Connection, data: RawData) {
                 room,
                 {
                     type: "cursor",
-                    participantId: connection.session.participantId,
-                    name: connection.session.name,
+                    participantId: sessionOf(connection).participantId,
+                    name: sessionOf(connection).name,
                     x: message.x,
                     y: message.y,
                 },
@@ -715,7 +762,7 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            const seat = room.admitted.get(connection.session.participantId);
+            const seat = room.admitted.get(sessionOf(connection).participantId);
             if (seat) {
                 seat.muted = message.muted;
                 broadcastRoomState(room);
@@ -741,24 +788,10 @@ async function handleMessage(connection: Connection, data: RawData) {
 
 const connections = new Set<Connection>();
 
-httpServer.listen(port, "0.0.0.0", () => {
-    console.log(`WebSocket backend running on ${port}`);
-});
-
 wss.on("connection", (ws, request) => {
     const url = new URL(request.url ?? "/", "ws://localhost");
     const token = url.searchParams.get("token");
-
-    if (!token) {
-        ws.close(1008, "Missing token");
-        return;
-    }
-
-    const session = readSession(token);
-    if (!session) {
-        ws.close(1008, "Invalid token");
-        return;
-    }
+    const session = token ? readSession(token) : null;
 
     const connection: Connection = {
         ws,
@@ -767,6 +800,14 @@ wss.on("connection", (ws, request) => {
         viaFormerSlug: false,
     };
     connections.add(connection);
+
+    sendJson(ws, { type: "hello", authed: Boolean(session) });
+
+    const heartbeat = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            ws.ping();
+        }
+    }, 20_000);
 
     let messageChain = Promise.resolve();
     ws.on("message", (data) => {
@@ -779,6 +820,7 @@ wss.on("connection", (ws, request) => {
     });
 
     ws.on("close", () => {
+        clearInterval(heartbeat);
         connections.delete(connection);
         if (connection.room) {
             detachSocket(connection.room, ws);
@@ -788,6 +830,16 @@ wss.on("connection", (ws, request) => {
     ws.on("error", (error) => {
         console.error("WebSocket error:", error);
     });
+});
+
+httpServer.listen(port, "0.0.0.0", () => {
+    console.log(`WebSocket backend running on ${port}`);
+    if (!process.env.DATABASE_URL) {
+        console.error("DATABASE_URL is not set; joins will fail");
+    }
+    if (!process.env.JWT_SECRET) {
+        console.error("JWT_SECRET is not set; using the default. HTTP and WS must match.");
+    }
 });
 
 setInterval(() => {

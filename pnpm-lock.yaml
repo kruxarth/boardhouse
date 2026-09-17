@@ -170,6 +170,9 @@ importers:
       '@repo/typescript-config':
         specifier: workspace:*
         version: link:../../packages/typescript-config
+      jsonwebtoken:
+        specifier: ^9.0.3
+        version: 9.0.3
       livekit-server-sdk:
         specifier: ^2.15.0
         version: 2.19.0
