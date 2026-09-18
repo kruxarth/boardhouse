@@ -67,7 +67,9 @@ export function TableShell({
     ask,
     now,
     voiceConfigured,
+    voiceUnlockNeeded,
     micOn,
+    speakingIds,
     onScene,
     onCursor,
     onTake,
@@ -84,6 +86,8 @@ export function TableShell({
     onEnd,
     onMute,
     onMic,
+    onAllowMic,
+    onListenOnly,
     onExport,
     onCopy,
 }: {
@@ -99,9 +103,11 @@ export function TableShell({
     ask: MarkerAsk | null;
     now: number;
     voiceConfigured: boolean | null;
+    voiceUnlockNeeded: boolean;
     micOn: boolean;
+    speakingIds: string[];
     onScene: (payload: unknown) => void;
-    onCursor: (x: number, y: number) => void;
+    onCursor: (x: number, y: number, tool: "pointer" | "laser", button: "up" | "down") => void;
     onTake: (slot: 0 | 1) => void;
     onDrop: (slot: 0 | 1) => void;
     onGive: (slot: 0 | 1, toParticipantId: string) => void;
@@ -116,6 +122,8 @@ export function TableShell({
     onEnd: () => void;
     onMute: (participantId: string) => void;
     onMic: () => void;
+    onAllowMic: () => void;
+    onListenOnly: () => void;
     onExport: () => void;
     onCopy: (label: string, value: string) => void;
 }) {
@@ -142,7 +150,9 @@ export function TableShell({
                     </p>
                 </div>
                 <ul className="seats">
-                    {table.seats.map((seat) => (
+                    {table.seats.map((seat) => {
+                        const speaking = speakingIds.includes(seat.id) && !seat.muted;
+                        return (
                         <li
                             key={seat.id}
                             className={seat.id === me.id ? "seat seat-me" : "seat"}
@@ -151,8 +161,19 @@ export function TableShell({
                                 {seat.name}
                                 {seat.id === table.hostParticipantId ? " (host)" : ""}
                             </span>
-                            <span className={seat.muted ? "mic-off" : "mic-on"} aria-hidden="true">
-                                {seat.muted ? <MicOffIcon /> : <MicIcon />}
+                            <span
+                                className={
+                                    seat.muted
+                                        ? "seat-mic mic-off"
+                                        : speaking
+                                          ? "seat-mic mic-on seat-mic-speaking"
+                                          : "seat-mic mic-on"
+                                }
+                            >
+                                <span aria-hidden="true">
+                                    {seat.muted ? <MicOffIcon /> : <MicIcon />}
+                                </span>
+                                {speaking ? <span className="sr-only">speaking</span> : null}
                             </span>
                             {isHost && seat.id !== me.id ? (
                                 <button
@@ -164,7 +185,8 @@ export function TableShell({
                                 </button>
                             ) : null}
                         </li>
-                    ))}
+                        );
+                    })}
                 </ul>
                 <div className="rail-actions">
                     <button
@@ -176,7 +198,11 @@ export function TableShell({
                                   : "Unmute microphone"
                         }
                         aria-pressed={micOn}
-                        className="icon-btn"
+                        className={
+                            micOn && speakingIds.includes(me.id)
+                                ? "icon-btn icon-btn-speaking"
+                                : "icon-btn"
+                        }
                         disabled={voiceConfigured === false}
                         onClick={onMic}
                         title={
@@ -235,9 +261,14 @@ export function TableShell({
                                 <button
                                     className="btn btn-ghost btn-tiny"
                                     onClick={() => onMode(table.accessMode === "knock" ? "open" : "knock")}
+                                    title={
+                                        table.accessMode === "knock"
+                                            ? "Guest links sit down. People who knock from the house still wait."
+                                            : "The house floor can walk in without knocking."
+                                    }
                                     type="button"
                                 >
-                                    {table.accessMode === "knock" ? "Open link" : "Knock"}
+                                    {table.accessMode === "knock" ? "Open house" : "House knocks"}
                                 </button>
                                 <button
                                     aria-label="Issue a new guest URL. Anyone with the old link has to knock."
@@ -279,6 +310,22 @@ export function TableShell({
             </header>
 
             <div className="board-wrap">
+            {voiceUnlockNeeded ? (
+                <div className="hear-banner" role="dialog" aria-labelledby="hear-title" aria-describedby="hear-copy">
+                    <div>
+                        <p id="hear-title">The table is talking.</p>
+                        <p id="hear-copy">
+                            Allow the microphone so you can hear. Stay muted after, if you want.
+                        </p>
+                    </div>
+                    <button className="btn btn-brass" onClick={onAllowMic} type="button">
+                        Allow microphone
+                    </button>
+                    <button className="btn btn-ghost" onClick={onListenOnly} type="button">
+                        Just listen
+                    </button>
+                </div>
+            ) : null}
             {ask ? (
                 <div className="ask-banner">
                     <p>
@@ -300,11 +347,7 @@ export function TableShell({
                 }
                 snapshot={snapshot}
                 remoteScene={remoteScene}
-                cursors={cursors.map((cursor) => ({
-                    ...cursor,
-                    drawing:
-                        table.markers[0] === cursor.id || table.markers[1] === cursor.id,
-                }))}
+                cursors={cursors}
                 onScene={onScene}
                 onCursor={onCursor}
             />

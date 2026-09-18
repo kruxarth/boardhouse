@@ -1,6 +1,6 @@
 import axios from "axios";
 import { BACKEND_URL } from "../app/config";
-import { writeSession, type Session } from "./session";
+import { clearSession, writeSession, type Session } from "./session";
 
 export type Occupancy = {
     used: number;
@@ -33,15 +33,37 @@ export type RoomMeta = {
     hostParticipantId: string;
 };
 
+export function isUnauthorizedError(error: unknown) {
+    return axios.isAxiosError(error) && error.response?.status === 401;
+}
+
 export async function createSession(name: string): Promise<Session> {
     const response = await axios.post<Session>(`${BACKEND_URL}/session`, { name });
     writeSession(response.data);
     return response.data;
 }
 
-export async function ensureSession(name?: string, existing?: Session | null) {
+export async function refreshSession(token: string): Promise<Session> {
+    const response = await axios.post<Session>(
+        `${BACKEND_URL}/session/refresh`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+    );
+    writeSession(response.data);
+    return response.data;
+}
+
+export async function sessionForSitting(existing: Session | null, name?: string): Promise<Session> {
     if (existing) {
-        return existing;
+        try {
+            return await refreshSession(existing.token);
+        } catch (error) {
+            if (isUnauthorizedError(error)) {
+                clearSession();
+            } else {
+                return existing;
+            }
+        }
     }
     if (!name) {
         throw new Error("Name required");
@@ -63,6 +85,10 @@ export async function createRoom(token: string, name?: string) {
         );
         return response.data;
     } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 401) {
+            clearSession();
+            throw new Error("Name required");
+        }
         if (axios.isAxiosError(error) && error.response?.status === 503) {
             const occupancy = error.response.data?.occupancy as Occupancy | undefined;
             const err = new Error("House is full") as Error & { occupancy?: Occupancy };

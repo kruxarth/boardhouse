@@ -3,7 +3,7 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import { JWT_SECRET } from "@repo/backend-common/config";
-import { MAX_ROOMS, SESSION_TTL } from "@repo/common/constants";
+import { MAX_ROOMS, SESSION_TTL_SECONDS } from "@repo/common/constants";
 import { CreateRoomSchema, CreateSessionSchema } from "@repo/common/types";
 import { prismaClient } from "@repo/db";
 import { middleware } from "./middleware";
@@ -72,24 +72,30 @@ setInterval(() => {
 }, WIPE_MS);
 void wipeExpiredRooms();
 
+function issueSession(participantId: string, name: string) {
+    const token = jwt.sign(
+        { sub: participantId, name },
+        JWT_SECRET,
+        { expiresIn: SESSION_TTL_SECONDS }
+    );
+    return { token, participantId, name };
+}
+
 app.post("/session", async (req, res) => {
     const parsed = CreateSessionSchema.safeParse(req.body);
     if (!parsed.success) {
         return res.status(400).json({ message: "Name must be 2–24 characters" });
     }
 
-    const participantId = randomUUID();
-    const token = jwt.sign(
-        { sub: participantId, name: parsed.data.name },
-        JWT_SECRET,
-        { expiresIn: SESSION_TTL }
-    );
+    return res.status(201).json(issueSession(randomUUID(), parsed.data.name));
+});
 
-    return res.status(201).json({
-        token,
-        participantId,
-        name: parsed.data.name,
-    });
+app.post("/session/refresh", middleware, (req, res) => {
+    if (!req.participantId || !req.participantName) {
+        return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    return res.json(issueSession(req.participantId, req.participantName));
 });
 
 app.get("/occupancy", async (_req, res) => {

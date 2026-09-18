@@ -1,3 +1,5 @@
+import { ROOM_TTL_MS } from "@repo/common/constants";
+
 export type Session = {
     token: string;
     participantId: string;
@@ -7,9 +9,42 @@ export type Session = {
 const TOKEN_KEY = "board-house.token";
 const ID_KEY = "board-house.participantId";
 const NAME_KEY = "board-house.name";
+const SKEW_MS = 5_000;
 
 function readKey(key: string, legacy: string) {
     return localStorage.getItem(key) ?? localStorage.getItem(legacy);
+}
+
+function decodeJwtPayload(token: string): { exp?: unknown; iat?: unknown } | null {
+    const payload = token.split(".")[1];
+    if (!payload) {
+        return null;
+    }
+    try {
+        const padded = payload.replace(/-/g, "+").replace(/_/g, "/");
+        const pad = padded.length % 4 === 0 ? "" : "=".repeat(4 - (padded.length % 4));
+        return JSON.parse(atob(padded + pad)) as { exp?: unknown; iat?: unknown };
+    } catch {
+        return null;
+    }
+}
+
+export function sessionStillValid(token: string, at = Date.now()): boolean {
+    const payload = decodeJwtPayload(token);
+    if (!payload) {
+        return false;
+    }
+    const deadline = at + SKEW_MS;
+    if (typeof payload.exp === "number" && payload.exp * 1000 <= deadline) {
+        return false;
+    }
+    if (typeof payload.iat === "number" && payload.iat * 1000 + ROOM_TTL_MS <= deadline) {
+        return false;
+    }
+    if (typeof payload.exp !== "number" && typeof payload.iat !== "number") {
+        return false;
+    }
+    return true;
 }
 
 export function readSession(): Session | null {
@@ -20,6 +55,10 @@ export function readSession(): Session | null {
     const participantId = readKey(ID_KEY, "boardhouse.participantId");
     const name = readKey(NAME_KEY, "boardhouse.name");
     if (!token || !participantId || !name) {
+        return null;
+    }
+    if (!sessionStillValid(token)) {
+        clearSession();
         return null;
     }
     return { token, participantId, name };

@@ -6,8 +6,8 @@ import { RoofArt, SkyArt } from "../components/HouseArt";
 import { HouseWindow } from "../components/HouseWindow";
 import { NameGate } from "../components/NameGate";
 import { useLocalSession } from "../hooks/useLocalSession";
-import { createRoom, createSession, fetchOccupancy, type Occupancy } from "../lib/api";
-import { rememberHostKey } from "../lib/session";
+import { createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
+import { rememberHostKey, readSession } from "../lib/session";
 
 export default function Home() {
     const router = useRouter();
@@ -51,23 +51,27 @@ export default function Home() {
         setError("");
         setPending(true);
         try {
-            const nextSession = session ?? (await createSession(name ?? ""));
-            if (!session) {
-                setSession(nextSession);
-            }
+            const nextSession = await sessionForSitting(readSession(), name);
+            setSession(nextSession);
             const room = await createRoom(nextSession.token, label.trim() || undefined);
             rememberHostKey(room.slug, room.hostKey);
             router.push(room.hostPath);
         } catch (err) {
             const message = err instanceof Error ? err.message : "Could not open a table";
-            setError(message === "Name required" ? "Tell us what to call you" : message);
+            if (message === "Name required") {
+                setSession(null);
+                setClaiming(true);
+                setError("Tell us what to call you");
+            } else {
+                setError(message);
+                setClaiming(false);
+            }
             if (message === "House is full") {
                 const next = await fetchOccupancy().catch(() => occupancy);
                 if (next) {
                     setOccupancy(next);
                 }
             }
-            setClaiming(false);
         } finally {
             setPending(false);
         }
@@ -77,7 +81,10 @@ export default function Home() {
         if (houseFull || pending) {
             return;
         }
-        if (!session) {
+        if (!readSession()) {
+            if (session) {
+                setSession(null);
+            }
             setClaiming(true);
             return;
         }
@@ -121,7 +128,7 @@ export default function Home() {
                                       table={table}
                                       disabled={pending || !ready}
                                       onEmpty={onEmptyTable}
-                                      onOccupied={(slug) => router.push(`/room/${slug}`)}
+                                      onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
                                   />
                               </li>
                           );
@@ -166,7 +173,7 @@ export default function Home() {
                                                       table={table}
                                                       disabled={pending || !ready}
                                                       onEmpty={onEmptyTable}
-                                                      onOccupied={(slug) => router.push(`/room/${slug}`)}
+                                                      onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
                                                   />
                                               </li>
                                           );

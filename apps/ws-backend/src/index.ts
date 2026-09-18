@@ -314,7 +314,13 @@ async function reclaimHost(room: LiveRoom, participantId: string) {
     });
 }
 
-async function handleJoin(connection: Connection, roomId: string, hostKey?: string, token?: string) {
+async function handleJoin(
+    connection: Connection,
+    roomId: string,
+    hostKey?: string,
+    token?: string,
+    fromHouse = false
+) {
     const session = authenticate(connection, token);
     if (!session) {
         return;
@@ -366,8 +372,8 @@ async function handleJoin(connection: Connection, roomId: string, hostKey?: stri
             return;
         }
 
-        const forceKnock = viaFormer || live.accessMode === "knock";
-        if (forceKnock) {
+        const houseMustKnock = fromHouse && live.accessMode === "knock";
+        if (viaFormer || houseMustKnock) {
             putInWaiting(live, connection, viaFormer);
             return;
         }
@@ -439,7 +445,13 @@ async function handleMessage(connection: Connection, data: RawData) {
     const message = parsed.data;
 
     if (message.type === "join") {
-        await handleJoin(connection, message.roomId, message.hostKey, message.token);
+        await handleJoin(
+            connection,
+            message.roomId,
+            message.hostKey,
+            message.token,
+            message.fromHouse === true
+        );
         return;
     }
 
@@ -733,6 +745,8 @@ async function handleMessage(connection: Connection, data: RawData) {
                     name: sessionOf(connection).name,
                     x: message.x,
                     y: message.y,
+                    tool: message.tool ?? "laser",
+                    button: message.button ?? "up",
                 },
                 connection.ws
             );

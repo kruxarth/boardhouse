@@ -5,9 +5,15 @@ export default async function RoomPage({
     searchParams,
 }: {
     params: Promise<{ slug: string }>;
-    searchParams: Promise<{ host?: string }>;
+    searchParams: Promise<{ host?: string; knock?: string }>;
 }) {
     const { slug } = await params;
     const query = await searchParams;
-    return <TableRoom slug={slug} hostKeyFromUrl={query.host ?? null} />;
+    return (
+        <TableRoom
+            slug={slug}
+            hostKeyFromUrl={query.host ?? null}
+            knockFromHouse={query.knock === "1"}
+        />
+    );
 }

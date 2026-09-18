@@ -34,6 +34,8 @@ const Excalidraw = dynamic(
     { ssr: false }
 );
 
+type PointerTool = "pointer" | "laser";
+type PointerButton = "up" | "down";
 type Pointer = { x: number; y: number; tool?: string };
 
 export type RemoteCursor = {
@@ -41,6 +43,8 @@ export type RemoteCursor = {
     name: string;
     x: number;
     y: number;
+    tool?: PointerTool;
+    button?: PointerButton;
     drawing?: boolean;
 };
 
@@ -68,6 +72,16 @@ function serializeScene(elements: unknown, files: unknown) {
     }
 }
 
+function collaboratorColor(id: string) {
+    let hash = 0;
+    for (let i = 0; i < id.length; i += 1) {
+        hash = (hash + id.charCodeAt(i)) % 2;
+    }
+    return hash === 0
+        ? { background: "#f386a1", stroke: "#1e1e1e" }
+        : { background: "#1e1e1e", stroke: "#f386a1" };
+}
+
 export function BoardCanvas({
     canDraw,
     allowLaser = true,
@@ -85,11 +99,15 @@ export function BoardCanvas({
     remoteScene: unknown;
     cursors: RemoteCursor[];
     onScene: (payload: unknown) => void;
-    onCursor: (x: number, y: number) => void;
+    onCursor: (x: number, y: number, tool: PointerTool, button: PointerButton) => void;
 }) {
     const apiRef = useRef<ExcalidrawApi | null>(null);
     const [apiReady, setApiReady] = useState(false);
     const applyingRef = useRef(false);
+    const pendingSceneRef = useRef<unknown>(null);
+    const lastPointerButtonRef = useRef<PointerButton>("up");
+    const applyTokenRef = useRef(0);
+    const sceneGenRef = useRef(0);
     const hydratedRef = useRef(false);
     const lastSceneRef = useRef("");
     const onSceneRef = useRef(onScene);
@@ -105,13 +123,23 @@ export function BoardCanvas({
         []
     );
 
-    const pointerThrottled = useMemo(
+    const pointerMoveThrottled = useMemo(
         () =>
-            throttle((x: number, y: number) => {
-                onCursorRef.current(x, y);
-            }, 80),
+            throttle((x: number, y: number, tool: PointerTool, button: PointerButton) => {
+                onCursorRef.current(x, y, tool, button);
+            }, 32),
         []
     );
+
+    const finishApplying = useCallback(() => {
+        applyingRef.current = false;
+        const pending = pendingSceneRef.current;
+        if (pending == null) {
+            return;
+        }
+        pendingSceneRef.current = null;
+        sendThrottled(pending);
+    }, [sendThrottled]);
 
     const applyScene = useCallback((payload: unknown) => {
         const api = apiRef.current;
@@ -129,6 +157,7 @@ export function BoardCanvas({
             }
         }
         applyingRef.current = true;
+        const applyToken = ++applyTokenRef.current;
         const remoteElements = Array.isArray(scene.elements) ? scene.elements : null;
         const reconcile = excalidrawLib.reconcile;
         const elements =
@@ -143,14 +172,14 @@ export function BoardCanvas({
             elements,
             captureUpdate: "NEVER",
         });
-        lastSceneRef.current = serializeScene(
-            scene.elements ?? payload,
-            api.getFiles()
-        );
+        lastSceneRef.current = serializeScene(elements, api.getFiles());
         window.setTimeout(() => {
-            applyingRef.current = false;
+            if (applyToken !== applyTokenRef.current) {
+                return;
+            }
+            finishApplying();
         }, 0);
-    }, []);
+    }, [finishApplying]);
 
     const syncTool = useCallback((drawing: boolean, laser: boolean) => {
         const api = apiRef.current;
@@ -184,8 +213,9 @@ export function BoardCanvas({
 
     const applyWhenReady = useCallback(
         (payload: unknown) => {
+            const generation = ++sceneGenRef.current;
             const attempt = () => {
-                if (unmountedRef.current) {
+                if (unmountedRef.current || generation !== sceneGenRef.current) {
                     return;
                 }
                 const api = apiRef.current;
@@ -219,7 +249,10 @@ export function BoardCanvas({
     const cursorsKey = useMemo(
         () =>
             cursors
-                .map((cursor) => `${cursor.id}:${cursor.x}:${cursor.y}:${cursor.drawing ? 1 : 0}`)
+                .map(
+                    (cursor) =>
+                        `${cursor.id}:${cursor.x}:${cursor.y}:${cursor.tool ?? ""}:${cursor.button ?? ""}`
+                )
                 .join("|"),
         [cursors]
     );
@@ -233,37 +266,47 @@ export function BoardCanvas({
         }
         const collaborators = new Map();
         for (const cursor of cursorsRef.current) {
+            const tool: PointerTool =
+                cursor.tool ?? (cursor.drawing ? "pointer" : "laser");
             collaborators.set(cursor.id, {
+                id: cursor.id,
                 username: cursor.name,
+                button: cursor.button ?? "up",
+                color: collaboratorColor(cursor.id),
                 pointer: {
                     x: cursor.x,
                     y: cursor.y,
-                    tool: cursor.drawing ? "pointer" : "laser",
+                    tool,
+                    renderCursor: true,
+                    laserColor: collaboratorColor(cursor.id).background,
                 },
             });
         }
-        applyingRef.current = true;
-        api.updateScene({ collaborators });
-        window.setTimeout(() => {
-            applyingRef.current = false;
-        }, 0);
+        api.updateScene({
+            collaborators,
+            captureUpdate: "NEVER",
+        });
     }, [apiReady, cursorsKey]);
 
     useEffect(() => {
         if (!apiReady) {
             return;
         }
+        applyingRef.current = true;
+        const applyToken = ++applyTokenRef.current;
         syncTool(canDraw, allowLaser);
         syncInk(markerSlot);
-        applyingRef.current = true;
         apiRef.current?.updateScene({
             appState: { viewBackgroundColor: "#ffffff" },
             captureUpdate: "NEVER",
         });
         window.setTimeout(() => {
-            applyingRef.current = false;
+            if (applyToken !== applyTokenRef.current) {
+                return;
+            }
+            finishApplying();
         }, 0);
-    }, [apiReady, canDraw, allowLaser, markerSlot, syncTool, syncInk]);
+    }, [apiReady, canDraw, allowLaser, markerSlot, syncTool, syncInk, finishApplying]);
 
     return (
         <div className="board-frame">
@@ -295,7 +338,7 @@ export function BoardCanvas({
                     welcomeScreen: false,
                 }}
                 onChange={(elements: unknown, _appState: unknown, files: unknown) => {
-                    if (!canDraw || !hydratedRef.current || applyingRef.current) {
+                    if (!canDraw || !hydratedRef.current) {
                         return;
                     }
                     const payload = scenePayload(elements, files);
@@ -304,13 +347,28 @@ export function BoardCanvas({
                         return;
                     }
                     lastSceneRef.current = serialized;
+                    if (applyingRef.current) {
+                        pendingSceneRef.current = payload;
+                        return;
+                    }
                     sendThrottled(payload);
                 }}
-                onPointerUpdate={(payload: { pointer?: Pointer }) => {
+                onPointerUpdate={(payload: { pointer?: Pointer; button?: PointerButton }) => {
                     if (!payload.pointer) {
                         return;
                     }
-                    pointerThrottled(payload.pointer.x, payload.pointer.y);
+                    const tool: PointerTool =
+                        payload.pointer.tool === "pointer" ? "pointer" : "laser";
+                    const button: PointerButton = payload.button === "down" ? "down" : "up";
+                    const x = payload.pointer.x;
+                    const y = payload.pointer.y;
+                    const buttonChanged = lastPointerButtonRef.current !== button;
+                    lastPointerButtonRef.current = button;
+                    if (buttonChanged) {
+                        onCursorRef.current(x, y, tool, button);
+                        return;
+                    }
+                    pointerMoveThrottled(x, y, tool, button);
                 }}
             />
         </div>

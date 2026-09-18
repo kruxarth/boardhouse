@@ -19,6 +19,7 @@ export const JoinMessageSchema = z.object({
     roomId: z.string().min(1).max(100),
     hostKey: z.string().min(1).max(200).optional(),
     token: z.string().min(1).max(2000).optional(),
+    fromHouse: z.boolean().optional(),
 });
 
 export const LeaveMessageSchema = z.object({
@@ -99,6 +100,8 @@ export const CursorMessageSchema = z.object({
     type: z.literal("cursor"),
     x: z.number().finite(),
     y: z.number().finite(),
+    tool: z.enum(["pointer", "laser"]).optional(),
+    button: z.enum(["up", "down"]).optional(),
 });
 
 export const MuteParticipantMessageSchema = z.object({

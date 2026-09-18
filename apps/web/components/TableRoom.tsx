@@ -6,7 +6,7 @@ import type { RoomStatePayload } from "@repo/common/types";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { useSocket } from "../hooks/useSocket";
 import { useVoice } from "../hooks/useVoice";
-import { createSession, fetchRoom } from "../lib/api";
+import { createSession, fetchRoom, isUnauthorizedError, refreshSession } from "../lib/api";
 import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import type { RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
@@ -40,7 +40,15 @@ function asTable(state: RoomStatePayload): TableModel {
     };
 }
 
-export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromUrl: string | null }) {
+export function TableRoom({
+    slug,
+    hostKeyFromUrl,
+    knockFromHouse,
+}: {
+    slug: string;
+    hostKeyFromUrl: string | null;
+    knockFromHouse: boolean;
+}) {
     const router = useRouter();
     const { session, setSession, ready } = useLocalSession();
     const [door, setDoor] = useState<DoorKind>("connecting");
@@ -58,12 +66,15 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
     const [now, setNow] = useState(Date.now());
     const [toast, setToast] = useState<string | null>(null);
     const [namePending, setNamePending] = useState(false);
+    const fromHouseRef = useRef(knockFromHouse);
     const hostKey = hostKeyFromUrl || (ready ? readHostKey(slug) : null);
-    const { socket, loading, failed } = useSocket(session?.token ?? null);
+    const [joinToken, setJoinToken] = useState<string | null>(null);
+    const preparedTokenRef = useRef<string | null>(null);
+    const { socket, loading, failed } = useSocket(joinToken);
     const joined = door === "joined";
     const voice = useVoice({
         enabled: joined,
-        token: session?.token ?? null,
+        token: joinToken,
         slug: table?.slug ?? slug,
     });
     const voiceRef = useRef(voice);
@@ -101,9 +112,56 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             return;
         }
         if (!session) {
-            setDoor("need-name");
+            preparedTokenRef.current = null;
+            setJoinToken(null);
+            setDoor((current) =>
+                current === "denied" ||
+                current === "full" ||
+                current === "expired" ||
+                current === "missing" ||
+                current === "error"
+                    ? current
+                    : "need-name"
+            );
+            return;
         }
-    }, [ready, session]);
+        if (preparedTokenRef.current === session.token) {
+            setJoinToken(session.token);
+            return;
+        }
+
+        const tokenToRefresh = session.token;
+        let cancelled = false;
+        void (async () => {
+            try {
+                const next = await refreshSession(tokenToRefresh);
+                if (cancelled) {
+                    return;
+                }
+                preparedTokenRef.current = next.token;
+                setSession(next);
+                setJoinToken(next.token);
+            } catch (error) {
+                if (cancelled) {
+                    return;
+                }
+                if (isUnauthorizedError(error)) {
+                    clearSession();
+                    preparedTokenRef.current = null;
+                    setSession(null);
+                    setJoinToken(null);
+                    setDoor("need-name");
+                    return;
+                }
+                preparedTokenRef.current = tokenToRefresh;
+                setJoinToken(tokenToRefresh);
+            }
+        })();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [ready, session, setSession]);
 
     useEffect(() => {
         let cancelled = false;
@@ -127,7 +185,7 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
     }, [slug]);
 
     useEffect(() => {
-        if (!socket || loading || !session) {
+        if (!socket || loading || !session || !joinToken) {
             return;
         }
 
@@ -146,7 +204,8 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                 type: "join",
                 roomId: slug,
                 hostKey: hostKey || undefined,
-                token: session.token,
+                token: joinToken,
+                fromHouse: fromHouseRef.current,
             })
         );
 
@@ -319,6 +378,8 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                         name: String(message.name ?? ""),
                         x: Number(message.x),
                         y: Number(message.y),
+                        tool: message.tool === "pointer" ? "pointer" : "laser",
+                        button: message.button === "down" ? "down" : "up",
                     });
                     return next.slice(-12);
                 });
@@ -363,7 +424,7 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
             ws.removeEventListener("close", onClose);
             ws.onmessage = null;
         };
-    }, [socket, loading, session, slug, hostKey, router, setSession]);
+    }, [socket, loading, session, joinToken, slug, hostKey, router, setSession]);
 
     useEffect(() => {
         if (!toast) {
@@ -381,13 +442,30 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
         setNamePending(true);
         try {
             const next = await createSession(name);
+            preparedTokenRef.current = next.token;
             setSession(next);
+            setJoinToken(next.token);
             setDoor("connecting");
         } catch {
             setDoor("error");
             setDoorMessage("Could not start a session");
         } finally {
             setNamePending(false);
+        }
+    }
+
+    async function allowMic() {
+        const on = await voice.allowMicrophone();
+        send({ type: "set_muted", muted: !on });
+        if (!on) {
+            setToast("Microphone stayed off. You can try the mic button.");
+        }
+    }
+
+    async function listenOnly() {
+        const heard = await voice.unlockPlayback();
+        if (!heard) {
+            setToast("Still silent. Allow the microphone so the table can play.");
         }
     }
 
@@ -448,9 +526,13 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                 ask={ask}
                 now={now}
                 voiceConfigured={voice.configured}
+                voiceUnlockNeeded={voice.configured === true && voice.unlockNeeded}
                 micOn={voice.micOn}
+                speakingIds={voice.speakingIds}
                 onScene={(payload) => send({ type: "canvas", payload })}
-                onCursor={(x, y) => send({ type: "cursor", x, y })}
+                onCursor={(x, y, tool, button) =>
+                    send({ type: "cursor", x, y, tool, button })
+                }
                 onTake={(slot) => send({ type: "take_marker", slot })}
                 onDrop={(slot) => send({ type: "drop_marker", slot })}
                 onGive={(slot, toParticipantId) => send({ type: "give_marker", slot, toParticipantId })}
@@ -470,6 +552,8 @@ export function TableRoom({ slug, hostKeyFromUrl }: { slug: string; hostKeyFromU
                 onEnd={() => send({ type: "end_room" })}
                 onMute={(participantId) => send({ type: "mute_participant", participantId })}
                 onMic={() => void toggleMic()}
+                onAllowMic={() => void allowMic()}
+                onListenOnly={() => void listenOnly()}
                 onExport={() => send({ type: "get_replay" })}
                 onCopy={copy}
             />
