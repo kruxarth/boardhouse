@@ -12,6 +12,7 @@ import {
     appendReplay,
     createLiveRoom,
     dropMarkersHeldBy,
+    exportReplay,
     forgetLiveRoom,
     getLiveRoom,
     guestSeatOpen,
@@ -787,13 +788,11 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            sendJson(connection.ws, {
-                type: "replay",
-                version: 1,
-                startedAt: new Date(room.startedAt).toISOString(),
-                slug: room.slug,
-                events: room.replay,
-            });
+            try {
+                sendJson(connection.ws, exportReplay(room));
+            } catch {
+                sendError(connection.ws, "Could not build that replay");
+            }
         }
     });
 }

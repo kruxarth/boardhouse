@@ -50,7 +50,7 @@ export function createLiveRoom(row: {
     createdAt: Date;
     expiresAt: Date;
 }): LiveRoom {
-    return {
+    const room: LiveRoom = {
         id: row.id,
         slug: row.slug,
         formerSlugs: new Set(row.formerSlugs),
@@ -64,9 +64,32 @@ export function createLiveRoom(row: {
         waiting: new Map(),
         markers: [row.hostParticipantId, null],
         asks: new Map(),
-        canvas: null,
+        canvas: { elements: [], files: {} },
         replay: [],
         replayBytes: 0,
+    };
+    appendReplay(room, "canvas", room.canvas);
+    return room;
+}
+
+export function exportReplay(room: LiveRoom) {
+    const events = room.replay.slice();
+    if (room.canvas) {
+        const last = events[events.length - 1];
+        if (!(last?.type === "canvas" && last.payload === room.canvas)) {
+            events.push({
+                t: Math.max(0, Date.now() - room.startedAt),
+                type: "canvas",
+                payload: room.canvas,
+            });
+        }
+    }
+    return {
+        type: "replay" as const,
+        version: 1,
+        startedAt: new Date(room.startedAt).toISOString(),
+        slug: room.slug,
+        events,
     };
 }
 

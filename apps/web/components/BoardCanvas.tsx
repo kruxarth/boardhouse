@@ -82,6 +82,31 @@ function collaboratorColor(id: string) {
         : { background: "#1e1e1e", stroke: "#f386a1" };
 }
 
+function elementId(element: unknown) {
+    if (!element || typeof element !== "object" || !("id" in element)) {
+        return "";
+    }
+    return typeof element.id === "string" ? element.id : "";
+}
+
+function replacePlaybackElements(local: readonly unknown[], remote: unknown[]) {
+    const remoteIds = new Set<string>();
+    for (const element of remote) {
+        const id = elementId(element);
+        if (id) {
+            remoteIds.add(id);
+        }
+    }
+    const gone = [];
+    for (const element of local) {
+        const id = elementId(element);
+        if (id && !remoteIds.has(id) && element && typeof element === "object") {
+            gone.push({ ...element, isDeleted: true });
+        }
+    }
+    return gone.length > 0 ? [...remote, ...gone] : remote;
+}
+
 export function BoardCanvas({
     canDraw,
     allowLaser = true,
@@ -89,6 +114,7 @@ export function BoardCanvas({
     snapshot,
     remoteScene,
     cursors,
+    playback = false,
     onScene,
     onCursor,
 }: {
@@ -98,6 +124,7 @@ export function BoardCanvas({
     snapshot: unknown;
     remoteScene: unknown;
     cursors: RemoteCursor[];
+    playback?: boolean;
     onScene: (payload: unknown) => void;
     onCursor: (x: number, y: number, tool: PointerTool, button: PointerButton) => void;
 }) {
@@ -141,7 +168,7 @@ export function BoardCanvas({
         sendThrottled(pending);
     }, [sendThrottled]);
 
-    const applyScene = useCallback((payload: unknown) => {
+    const applyScene = useCallback((payload: unknown, replace = false) => {
         const api = apiRef.current;
         if (!api || !payload || typeof payload !== "object") {
             return;
@@ -160,14 +187,18 @@ export function BoardCanvas({
         const applyToken = ++applyTokenRef.current;
         const remoteElements = Array.isArray(scene.elements) ? scene.elements : null;
         const reconcile = excalidrawLib.reconcile;
-        const elements =
-            remoteElements && reconcile
-                ? reconcile(
-                      api.getSceneElementsIncludingDeleted(),
-                      remoteElements,
-                      api.getAppState()
-                  )
-                : (scene.elements ?? payload);
+        const elements = replace
+            ? replacePlaybackElements(
+                  api.getSceneElementsIncludingDeleted(),
+                  remoteElements ?? []
+              )
+            : remoteElements && reconcile
+              ? reconcile(
+                    api.getSceneElementsIncludingDeleted(),
+                    remoteElements,
+                    api.getAppState()
+                )
+              : (scene.elements ?? payload);
         api.updateScene({
             elements,
             captureUpdate: "NEVER",
@@ -212,7 +243,7 @@ export function BoardCanvas({
     }, []);
 
     const applyWhenReady = useCallback(
-        (payload: unknown) => {
+        (payload: unknown, replace = false) => {
             const generation = ++sceneGenRef.current;
             const attempt = () => {
                 if (unmountedRef.current || generation !== sceneGenRef.current) {
@@ -220,11 +251,11 @@ export function BoardCanvas({
                 }
                 const api = apiRef.current;
                 const appState = api?.getAppState() as { isLoading?: boolean } | undefined;
-                if (!api || appState?.isLoading !== false) {
+                if (!api || appState?.isLoading === true) {
                     window.setTimeout(attempt, 50);
                     return;
                 }
-                applyScene(payload);
+                applyScene(payload, replace);
                 hydratedRef.current = true;
             };
             attempt();
@@ -236,15 +267,15 @@ export function BoardCanvas({
         if (!snapshot) {
             return;
         }
-        applyWhenReady(snapshot);
-    }, [snapshot, applyWhenReady]);
+        applyWhenReady(snapshot, playback);
+    }, [snapshot, playback, applyWhenReady]);
 
     useEffect(() => {
-        if (!remoteScene) {
+        if (playback || !remoteScene) {
             return;
         }
         applyWhenReady(remoteScene);
-    }, [remoteScene, applyWhenReady]);
+    }, [playback, remoteScene, applyWhenReady]);
 
     const cursorsKey = useMemo(
         () =>
@@ -316,7 +347,7 @@ export function BoardCanvas({
                     apiRef.current = api as unknown as ExcalidrawApi;
                     setApiReady(true);
                 }}
-                isCollaborating
+                isCollaborating={!playback}
                 viewModeEnabled={!canDraw}
                 aiEnabled={false}
                 initialData={{

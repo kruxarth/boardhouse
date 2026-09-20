@@ -391,15 +391,23 @@ export function TableRoom({
                 return;
             }
             if (type === "replay") {
-                const blob = new Blob([JSON.stringify(payload, null, 2)], {
-                    type: "application/json",
-                });
-                const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
-                link.download = `board-house-${slugRef.current}.json`;
-                link.click();
-                URL.revokeObjectURL(link.href);
-                setToast("Replay downloaded");
+                try {
+                    const blob = new Blob([JSON.stringify(payload)], {
+                        type: "application/json",
+                    });
+                    const href = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = href;
+                    link.download = `board-house-${slugRef.current}.json`;
+                    link.rel = "noopener";
+                    document.body.append(link);
+                    link.click();
+                    link.remove();
+                    window.setTimeout(() => URL.revokeObjectURL(href), 2_000);
+                    setToast("Replay downloaded");
+                } catch {
+                    setToast("Could not download that replay");
+                }
                 return;
             }
             if (type === "error") {
