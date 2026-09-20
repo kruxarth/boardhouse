@@ -1,7 +1,12 @@
 import { randomUUID } from "crypto";
 import type { WebSocket } from "ws";
 import type { AccessMode, ReplayEvent } from "@repo/common/types";
-import { MAX_REPLAY_BYTES, MAX_REPLAY_EVENTS, MAX_SEATS } from "@repo/common/constants";
+import {
+    MAX_REPLAY_BYTES,
+    MAX_REPLAY_EVENTS,
+    MIN_REPLAY_CANVAS_GAP_MS,
+    MAX_SEATS,
+} from "@repo/common/constants";
 
 export type Seat = {
     ws: WebSocket;
@@ -105,25 +110,73 @@ export function forgetLiveRoom(id: string) {
     liveRooms.delete(id);
 }
 
-export function appendReplay(room: LiveRoom, type: string, payload: unknown) {
-    const event: ReplayEvent = { t: Date.now() - room.startedAt, type, payload };
-    const size = JSON.stringify(event).length;
-    room.replay.push(event);
-    room.replayBytes += size;
+function replayEventSize(event: ReplayEvent) {
+    try {
+        return JSON.stringify(event).length;
+    } catch {
+        return 0;
+    }
+}
 
+function dropDensestReplay(room: LiveRoom) {
+    if (room.replay.length <= 2) {
+        const removed = room.replay.shift();
+        if (removed) {
+            room.replayBytes -= replayEventSize(removed);
+        }
+        return;
+    }
+    let dropAt = 1;
+    let tightest = Infinity;
+    for (let i = 1; i < room.replay.length - 1; i += 1) {
+        const prev = room.replay[i - 1]!;
+        const current = room.replay[i]!;
+        const next = room.replay[i + 1]!;
+        const densest = Math.min(current.t - prev.t, next.t - current.t);
+        if (densest < tightest) {
+            tightest = densest;
+            dropAt = i;
+        }
+    }
+    const removed = room.replay.splice(dropAt, 1)[0];
+    if (removed) {
+        room.replayBytes -= replayEventSize(removed);
+    }
+}
+
+function trimReplay(room: LiveRoom) {
     while (
         room.replay.length > MAX_REPLAY_EVENTS ||
         room.replayBytes > MAX_REPLAY_BYTES
     ) {
-        const removed = room.replay.shift();
-        if (!removed) {
+        if (room.replay.length === 0) {
+            room.replayBytes = 0;
             break;
         }
-        room.replayBytes -= JSON.stringify(removed).length;
-        if (room.replayBytes < 0) {
-            room.replayBytes = 0;
+        dropDensestReplay(room);
+    }
+    if (room.replayBytes < 0) {
+        room.replayBytes = 0;
+    }
+}
+
+export function appendReplay(room: LiveRoom, type: string, payload: unknown) {
+    const t = Date.now() - room.startedAt;
+    if (type === "canvas") {
+        const last = room.replay[room.replay.length - 1];
+        if (last?.type === "canvas" && t - last.t < MIN_REPLAY_CANVAS_GAP_MS) {
+            room.replayBytes -= replayEventSize(last);
+            last.t = t;
+            last.payload = payload;
+            room.replayBytes += replayEventSize(last);
+            trimReplay(room);
+            return;
         }
     }
+    const event: ReplayEvent = { t, type, payload };
+    room.replay.push(event);
+    room.replayBytes += replayEventSize(event);
+    trimReplay(room);
 }
 
 export function dropMarkersHeldBy(room: LiveRoom, participantId: string) {

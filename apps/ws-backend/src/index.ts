@@ -127,7 +127,6 @@ function broadcastRoomState(room: LiveRoom) {
 function broadcastMarkers(room: LiveRoom) {
     const payload = { type: "marker_state", slots: room.markers };
     broadcastAdmitted(room, payload);
-    appendReplay(room, "marker", { slots: room.markers });
 }
 
 function askPayload(room: LiveRoom, ask: { requestId: string; fromParticipantId: string; slot: 0 | 1 }) {

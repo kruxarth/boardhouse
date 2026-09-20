@@ -53,6 +53,15 @@ export function MicOffIcon() {
     );
 }
 
+export function FileIcon() {
+    return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
+            <path d="M7 4.5h7.2L18 8.4V19.5H7Z" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M14 4.5v4.2h4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+    );
+}
+
 export function DownloadIcon() {
     return (
         <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">

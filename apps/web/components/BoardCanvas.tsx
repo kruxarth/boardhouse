@@ -1,8 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+    forwardRef,
+    useCallback,
+    useEffect,
+    useImperativeHandle,
+    useMemo,
+    useRef,
+    useState,
+} from "react";
 import { MAX_CANVAS_MESSAGE_BYTES } from "@repo/common/constants";
+import { downloadBlob } from "../lib/download";
 import { throttle } from "../lib/throttle";
 
 import "@excalidraw/excalidraw/index.css";
@@ -22,13 +31,24 @@ type ReconcileElements = (
     localAppState: unknown
 ) => unknown[];
 
-const excalidrawLib: { reconcile: ReconcileElements | null } = { reconcile: null };
+type ExportToBlob = (opts: {
+    elements: readonly unknown[];
+    appState?: Record<string, unknown>;
+    files?: Record<string, unknown> | null;
+    mimeType?: string;
+}) => Promise<Blob>;
+
+const excalidrawLib: {
+    reconcile: ReconcileElements | null;
+    exportToBlob: ExportToBlob | null;
+} = { reconcile: null, exportToBlob: null };
 
 const Excalidraw = dynamic(
     async () => {
         const mod = await import("@excalidraw/excalidraw");
         excalidrawLib.reconcile =
             mod.reconcileElements as unknown as ReconcileElements;
+        excalidrawLib.exportToBlob = mod.exportToBlob as unknown as ExportToBlob;
         return mod.Excalidraw;
     },
     { ssr: false }
@@ -89,6 +109,15 @@ function elementId(element: unknown) {
     return typeof element.id === "string" ? element.id : "";
 }
 
+function liveElements(api: ExcalidrawApi) {
+    return api.getSceneElementsIncludingDeleted().filter((element) => {
+        if (!element || typeof element !== "object" || !("isDeleted" in element)) {
+            return true;
+        }
+        return (element as { isDeleted?: boolean }).isDeleted !== true;
+    });
+}
+
 function replacePlaybackElements(local: readonly unknown[], remote: unknown[]) {
     const remoteIds = new Set<string>();
     for (const element of remote) {
@@ -107,17 +136,12 @@ function replacePlaybackElements(local: readonly unknown[], remote: unknown[]) {
     return gone.length > 0 ? [...remote, ...gone] : remote;
 }
 
-export function BoardCanvas({
-    canDraw,
-    allowLaser = true,
-    markerSlot = null,
-    snapshot,
-    remoteScene,
-    cursors,
-    playback = false,
-    onScene,
-    onCursor,
-}: {
+export type BoardHandle = {
+    savePng: (filename: string) => Promise<void>;
+    saveExcalidraw: (filename: string) => void;
+};
+
+type BoardCanvasProps = {
     canDraw: boolean;
     allowLaser?: boolean;
     markerSlot?: 0 | 1 | null;
@@ -127,7 +151,22 @@ export function BoardCanvas({
     playback?: boolean;
     onScene: (payload: unknown) => void;
     onCursor: (x: number, y: number, tool: PointerTool, button: PointerButton) => void;
-}) {
+};
+
+export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function BoardCanvas(
+    {
+        canDraw,
+        allowLaser = true,
+        markerSlot = null,
+        snapshot,
+        remoteScene,
+        cursors,
+        playback = false,
+        onScene,
+        onCursor,
+    },
+    ref
+) {
     const apiRef = useRef<ExcalidrawApi | null>(null);
     const [apiReady, setApiReady] = useState(false);
     const applyingRef = useRef(false);
@@ -339,6 +378,48 @@ export function BoardCanvas({
         }, 0);
     }, [apiReady, canDraw, allowLaser, markerSlot, syncTool, syncInk, finishApplying]);
 
+    useImperativeHandle(ref, () => ({
+        async savePng(filename) {
+            const api = apiRef.current;
+            const exportToBlob = excalidrawLib.exportToBlob;
+            if (!api || !exportToBlob) {
+                throw new Error("Board is not ready");
+            }
+            const blob = await exportToBlob({
+                elements: liveElements(api),
+                appState: {
+                    exportBackground: true,
+                    viewBackgroundColor: "#ffffff",
+                },
+                files: api.getFiles(),
+                mimeType: "image/png",
+            });
+            downloadBlob(blob, filename);
+        },
+        saveExcalidraw(filename) {
+            const api = apiRef.current;
+            if (!api) {
+                throw new Error("Board is not ready");
+            }
+            downloadBlob(
+                new Blob(
+                    [
+                        JSON.stringify({
+                            type: "excalidraw",
+                            version: 2,
+                            source: "https://excalidraw.com",
+                            elements: liveElements(api),
+                            appState: { viewBackgroundColor: "#ffffff" },
+                            files: api.getFiles(),
+                        }),
+                    ],
+                    { type: "application/json" }
+                ),
+                filename
+            );
+        },
+    }));
+
     return (
         <div className="board-frame">
             <Excalidraw
@@ -407,4 +488,4 @@ export function BoardCanvas({
             />
         </div>
     );
-}
+});

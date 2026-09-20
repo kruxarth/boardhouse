@@ -8,9 +8,10 @@ import { useSocket } from "../hooks/useSocket";
 import { useVoice } from "../hooks/useVoice";
 import { createSession, fetchRoom, isUnauthorizedError, refreshSession } from "../lib/api";
 import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
-import type { RemoteCursor } from "./BoardCanvas";
+import type { BoardHandle, RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
+import type { RecapEvent } from "./SittingRecap";
 import { doorCopy, TableShell, type MarkerAsk, type TableModel } from "./TableShell";
 
 type DoorKind =
@@ -62,6 +63,9 @@ export function TableRoom({
     const [now, setNow] = useState(Date.now());
     const [toast, setToast] = useState<string | null>(null);
     const [namePending, setNamePending] = useState(false);
+    const [recapEvents, setRecapEvents] = useState<RecapEvent[] | null>(null);
+    const boardRef = useRef<BoardHandle | null>(null);
+    const awaitingReplayRef = useRef(false);
     const fromHouseRef = useRef(knockFromHouse);
     const hostKey = hostKeyFromUrl || (ready ? readHostKey(slug) : null);
     const [joinToken, setJoinToken] = useState<string | null>(null);
@@ -415,23 +419,32 @@ export function TableRoom({
                 return;
             }
             if (type === "replay") {
-                try {
-                    const blob = new Blob([JSON.stringify(payload)], {
-                        type: "application/json",
-                    });
-                    const href = URL.createObjectURL(blob);
-                    const link = document.createElement("a");
-                    link.href = href;
-                    link.download = `board-house-${slugRef.current}.json`;
-                    link.rel = "noopener";
-                    document.body.append(link);
-                    link.click();
-                    link.remove();
-                    window.setTimeout(() => URL.revokeObjectURL(href), 2_000);
-                    setToast("Replay downloaded");
-                } catch {
-                    setToast("Could not download that replay");
+                if (!awaitingReplayRef.current) {
+                    return;
                 }
+                awaitingReplayRef.current = false;
+                const incoming = Array.isArray(message.events) ? message.events : [];
+                const frames = incoming.filter((item) => {
+                    if (!item || typeof item !== "object" || !("type" in item)) {
+                        return false;
+                    }
+                    return (item as RecapEvent).type === "canvas";
+                });
+                if (frames.length === 0) {
+                    setToast("Nothing to rewind yet");
+                    return;
+                }
+                setRecapEvents(
+                    incoming.map((item) => {
+                        const row = item as Record<string, unknown>;
+                        const parsed: RecapEvent = {
+                            t: Number(row.t) || 0,
+                            type: String(row.type ?? ""),
+                            payload: row.payload,
+                        };
+                        return parsed;
+                    })
+                );
                 return;
             }
             if (type === "error") {
@@ -512,6 +525,29 @@ export function TableRoom({
         setToast(`${label} copied`);
     }
 
+    function requestReplay() {
+        awaitingReplayRef.current = true;
+        send({ type: "get_replay" });
+    }
+
+    async function saveImage() {
+        try {
+            await boardRef.current?.savePng(`board-house-${slugRef.current}.png`);
+            setToast("Image saved");
+        } catch {
+            setToast("Could not save the image");
+        }
+    }
+
+    function saveBoard() {
+        try {
+            boardRef.current?.saveExcalidraw(`board-house-${slugRef.current}.excalidraw`);
+            setToast("Board saved");
+        } catch {
+            setToast("Could not save the board");
+        }
+    }
+
     if (!ready) {
         const connecting = doorCopy("connecting");
         return <DoorScreen title={connecting.title} body={connecting.body} />;
@@ -584,8 +620,13 @@ export function TableRoom({
                 onMic={() => void toggleMic()}
                 onAllowMic={() => void allowMic()}
                 onListenOnly={() => void listenOnly()}
-                onExport={() => send({ type: "get_replay" })}
+                onReplay={requestReplay}
+                onSaveImage={() => void saveImage()}
+                onSaveBoard={saveBoard}
                 onCopy={copy}
+                onCloseRecap={() => setRecapEvents(null)}
+                boardRef={boardRef}
+                recapEvents={recapEvents}
             />
             {toast ? (
                 <p className="toast" role="status">

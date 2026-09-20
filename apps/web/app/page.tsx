@@ -261,7 +261,7 @@ export default function Home() {
                     <li>Ten seats at a table. No spectators.</li>
                     <li>Two markers move. Everyone else points.</li>
                     <li>Mics work like a call. The host can mute you; only you unmute yourself.</li>
-                    <li>Every table is wiped at twenty-four hours. Take the replay with you.</li>
+                    <li>Every table is wiped at twenty-four hours. Save the board if you want it.</li>
                 </ul>
             </footer>
         </div>

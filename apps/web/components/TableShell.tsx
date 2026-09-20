@@ -1,15 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type RefObject } from "react";
 import type { PresencePerson } from "@repo/common/types";
-import { BoardCanvas, type RemoteCursor } from "./BoardCanvas";
+import { BoardCanvas, type BoardHandle, type RemoteCursor } from "./BoardCanvas";
 import {
-    AskIcon,
     CloseIcon,
     DoorIcon,
     DownloadIcon,
     DrawerIcon,
-    GrabIcon,
+    FileIcon,
     KeyIcon,
     LinkIcon,
     MarkerOneIcon,
@@ -17,10 +16,10 @@ import {
     MicIcon,
     MicOffIcon,
     PlayIcon,
-    PutDownIcon,
     RotateIcon,
     WipeIcon,
 } from "./Icons";
+import { SittingRecap, type RecapEvent } from "./SittingRecap";
 
 type DoorKind = "connecting" | "waiting" | "denied" | "full" | "expired" | "missing" | "error";
 
@@ -104,8 +103,13 @@ export function TableShell({
     onMic,
     onAllowMic,
     onListenOnly,
-    onExport,
+    onReplay,
+    onSaveImage,
+    onSaveBoard,
     onCopy,
+    onCloseRecap,
+    boardRef,
+    recapEvents,
 }: {
     me: { id: string; name: string };
     hostKey: string | null;
@@ -140,8 +144,13 @@ export function TableShell({
     onMic: () => void;
     onAllowMic: () => void;
     onListenOnly: () => void;
-    onExport: () => void;
+    onReplay: () => void;
+    onSaveImage: () => void;
+    onSaveBoard: () => void;
     onCopy: (label: string, value: string) => void;
+    onCloseRecap: () => void;
+    boardRef: RefObject<BoardHandle | null>;
+    recapEvents: RecapEvent[] | null;
 }) {
     const [confirmEnd, setConfirmEnd] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
@@ -264,28 +273,6 @@ export function TableShell({
                     >
                         {micOn ? <MicIcon /> : <MicOffIcon />}
                     </button>
-                    <div className="pen-row">
-                        {([0, 1] as const).map((slot) => (
-                            <Pen
-                                key={slot}
-                                slot={slot}
-                                holderId={table.markers[slot]}
-                                holderName={personName(table.seats, table.markers[slot])}
-                                meId={me.id}
-                                seats={table.seats}
-                                isHost={isHost}
-                                asked={Boolean(asked[slot])}
-                                onTake={onTake}
-                                onDrop={onDrop}
-                                onGive={onGive}
-                                onAsk={(holderId) => {
-                                    setAskedSlots((current) => ({ ...current, [slot]: true }));
-                                    onAsk(holderId);
-                                }}
-                                onHostTake={onHostTake}
-                            />
-                        ))}
-                    </div>
                     <button
                         aria-controls="table-drawer"
                         aria-expanded={drawerOpen}
@@ -352,7 +339,7 @@ export function TableShell({
                                                 onClick={() => onAnswer(ask.requestId, true)}
                                                 type="button"
                                             >
-                                                Give
+                                                Pass
                                             </button>
                                             <button
                                                 className="btn btn-ghost"
@@ -369,6 +356,7 @@ export function TableShell({
                     </div>
                 ) : null}
                 <BoardCanvas
+                    ref={boardRef}
                     canDraw={canDraw}
                     allowLaser
                     markerSlot={
@@ -380,18 +368,47 @@ export function TableShell({
                     onScene={onScene}
                     onCursor={onCursor}
                 />
+                <div className="pen-tray" aria-label="Markers">
+                    {([0, 1] as const).map((slot) => (
+                        <Pen
+                            key={slot}
+                            slot={slot}
+                            holderId={table.markers[slot]}
+                            holderName={personName(table.seats, table.markers[slot])}
+                            meId={me.id}
+                            seats={table.seats}
+                            isHost={isHost}
+                            asked={Boolean(asked[slot])}
+                            onTake={onTake}
+                            onDrop={onDrop}
+                            onGive={onGive}
+                            onAsk={(holderId) => {
+                                setAskedSlots((current) => ({ ...current, [slot]: true }));
+                                onAsk(holderId);
+                            }}
+                            onHostTake={onHostTake}
+                        />
+                    ))}
+                </div>
+                {recapEvents ? (
+                    <SittingRecap events={recapEvents} onClose={onCloseRecap} />
+                ) : null}
             </div>
 
             <aside className="table-drawer" hidden={!drawerOpen} id="table-drawer">
                 <p className="drawer-kicker">Table tools</p>
-                <button className="drawer-item" onClick={onExport} type="button">
+                <button className="drawer-item" onClick={onSaveImage} type="button">
                     <DownloadIcon />
-                    Export sitting
+                    Save image
                 </button>
-                <a className="drawer-item" href="/replay">
+                <button className="drawer-item" onClick={onSaveBoard} type="button">
+                    <FileIcon />
+                    Save board
+                </button>
+                <button className="drawer-item" onClick={onReplay} type="button">
                     <PlayIcon />
                     Replay
-                </a>
+                </button>
                 <button className="drawer-item" onClick={() => onCopy("Guest link", guestUrl)} type="button">
                     <LinkIcon />
                     Copy guest door
@@ -492,92 +509,83 @@ function Pen({
     const mine = holderId === meId;
     const free = holderId === null;
     const label = MARKER_NAMES[slot];
-    const who = free ? "Free" : mine ? "Yours" : holderName ?? "Taken";
+    const who = holderName ?? "someone";
     const Icon = slot === 0 ? MarkerOneIcon : MarkerTwoIcon;
     const status = free
-        ? "On the table. Pick it up."
+        ? "On the table"
         : mine
-          ? "In your hand."
-          : asked
-            ? `Asked ${who} for it.`
-            : `${who} is holding it. Ask for it.`;
+          ? "In your hand"
+          : `Held by ${who}`;
 
     return (
-        <div className={`pen pen-${slot === 0 ? "one" : "two"}${mine ? " pen-mine" : ""}${free ? " pen-free" : ""}`}>
-            <button
-                aria-label={`${label}. ${status}`}
-                aria-pressed={mine}
-                className="pen-body"
-                disabled={asked || mine}
-                onClick={() => {
-                    if (free) {
-                        onTake(slot);
-                    } else if (holderId) {
-                        onAsk(holderId);
-                    }
-                }}
-                title={status}
-                type="button"
-            >
-                <span className="pen-nib" aria-hidden="true">
+        <article
+            className={`pen-card pen-${slot === 0 ? "one" : "two"}${mine ? " pen-mine" : ""}${free ? " pen-free" : ""}`}
+        >
+            <div className="pen-card-head">
+                <span className="pen-stick" aria-hidden="true">
                     <Icon />
                 </span>
-                <span className="pen-who">{asked ? "Asked" : who}</span>
-            </button>
-            {mine ? (
-                <div className="pen-actions">
-                    {others.length > 0 ? (
-                        <div className="pen-people" role="group" aria-label={`Hand ${label} to`}>
-                            {others.map((seat) => (
-                                <button
-                                    key={seat.id}
-                                    className="pen-hand"
-                                    onClick={() => onGive(slot, seat.id)}
-                                    title={`Hand to ${seat.name}`}
-                                    type="button"
-                                >
-                                    {seat.name}
-                                </button>
-                            ))}
-                        </div>
-                    ) : null}
-                    <button
-                        aria-label={`Put ${label} down`}
-                        className="icon-btn icon-btn-quiet"
-                        onClick={() => onDrop(slot)}
-                        title="Put down"
-                        type="button"
-                    >
-                        <PutDownIcon />
-                    </button>
+                <div>
+                    <p className="pen-label">{label}</p>
+                    <p className="pen-status">{asked ? `Asked ${who}` : status}</p>
                 </div>
-            ) : null}
-            {!free && !mine ? (
-                <div className="pen-actions">
-                    <button
-                        aria-label={asked ? `Waiting for ${who}` : `Ask ${who} for ${label}`}
-                        className="icon-btn icon-btn-quiet"
-                        disabled={asked}
-                        onClick={() => holderId && onAsk(holderId)}
-                        title={asked ? "Asked" : "Ask for this pen"}
-                        type="button"
-                    >
-                        <AskIcon />
+            </div>
+            <div className="pen-verbs">
+                {free ? (
+                    <button className="pen-verb" onClick={() => onTake(slot)} type="button">
+                        Pick up
                     </button>
-                    {isHost ? (
+                ) : null}
+                {mine ? (
+                    <>
+                        <button className="pen-verb" onClick={() => onDrop(slot)} type="button">
+                            Put down
+                        </button>
+                        {others.length > 0 ? (
+                            <label className="pen-pass">
+                                <span className="sr-only">Pass {label} to</span>
+                                <select
+                                    defaultValue=""
+                                    onChange={(event) => {
+                                        const next = event.target.value;
+                                        event.target.value = "";
+                                        if (next) {
+                                            onGive(slot, next);
+                                        }
+                                    }}
+                                >
+                                    <option disabled value="">
+                                        Pass to
+                                    </option>
+                                    {others.map((seat) => (
+                                        <option key={seat.id} value={seat.id}>
+                                            {seat.name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </label>
+                        ) : null}
+                    </>
+                ) : null}
+                {!free && !mine ? (
+                    <>
                         <button
-                            aria-label={`Take ${label}`}
-                            className="icon-btn icon-btn-quiet"
-                            onClick={() => onHostTake(slot)}
-                            title="Take this pen"
+                            className="pen-verb"
+                            disabled={asked}
+                            onClick={() => holderId && onAsk(holderId)}
                             type="button"
                         >
-                            <GrabIcon />
+                            {asked ? "Asked" : `Ask ${who}`}
                         </button>
-                    ) : null}
-                </div>
-            ) : null}
-        </div>
+                        {isHost ? (
+                            <button className="pen-verb" onClick={() => onHostTake(slot)} type="button">
+                                Take
+                            </button>
+                        ) : null}
+                    </>
+                ) : null}
+            </div>
+        </article>
     );
 }
 
