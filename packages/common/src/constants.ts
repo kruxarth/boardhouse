@@ -21,3 +21,9 @@ export const REACTION_MIN_GAP_MS = 800;
 export const AVATAR_COUNT = MAX_SEATS;
 export const REACTIONS = ["👍", "🔥", "😂", "🎉", "👀", "❤️"] as const;
 export type Reaction = (typeof REACTIONS)[number];
+
+/** Browsers sometimes drop the emoji variation selector. Compare the picture, not the bytes. */
+export function asReaction(value: string): Reaction | null {
+    const needle = value.replace(/\uFE0E|\uFE0F/g, "");
+    return REACTIONS.find((emoji) => emoji.replace(/\uFE0E|\uFE0F/g, "") === needle) ?? null;
+}

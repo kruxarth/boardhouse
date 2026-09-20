@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { REACTIONS } from "./constants";
+import { asReaction } from "./constants";
 
 export const AccessModeSchema = z.enum(["knock", "open"]);
 export type AccessMode = z.infer<typeof AccessModeSchema>;
@@ -121,7 +121,17 @@ export const SetMutedMessageSchema = z.object({
 
 export const ReactMessageSchema = z.object({
     type: z.literal("react"),
-    emoji: z.enum(REACTIONS),
+    emoji: z
+        .string()
+        .max(16)
+        .transform((value, ctx) => {
+            const emoji = asReaction(value);
+            if (!emoji) {
+                ctx.addIssue({ code: "custom", message: "Unknown reaction" });
+                return z.NEVER;
+            }
+            return emoji;
+        }),
 });
 
 export const GetReplayMessageSchema = z.object({

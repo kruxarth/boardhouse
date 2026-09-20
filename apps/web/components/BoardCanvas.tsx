@@ -259,11 +259,14 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
         api.setActiveTool({ type: laser ? "laser" : "hand" });
     }, []);
 
+    const lastInkSlotRef = useRef<0 | 1 | null>(null);
     const syncInk = useCallback((slot: 0 | 1 | null) => {
         const api = apiRef.current;
-        if (!api || slot === null) {
+        if (!api || slot === null || slot === lastInkSlotRef.current) {
+            lastInkSlotRef.current = slot;
             return;
         }
+        lastInkSlotRef.current = slot;
         api.updateScene({
             appState: {
                 currentItemStrokeColor: MARKER_INK[slot],
