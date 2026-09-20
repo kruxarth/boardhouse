@@ -4,16 +4,16 @@
  */
 
 export const AVATARS = [
-    { name: "Moth", src: "/avatars/moth.png" },
-    { name: "Moon", src: "/avatars/moon.png" },
-    { name: "Key", src: "/avatars/key.png" },
-    { name: "Teacup", src: "/avatars/teacup.png" },
-    { name: "Match", src: "/avatars/match.png" },
-    { name: "Bell", src: "/avatars/bell.png" },
-    { name: "Record", src: "/avatars/record.png" },
-    { name: "Hourglass", src: "/avatars/hourglass.png" },
-    { name: "Cat", src: "/avatars/cat.png" },
-    { name: "Hat", src: "/avatars/hat.png" },
+    { name: "Moth", src: "/avatars/moth.png?v=goofy" },
+    { name: "Moon", src: "/avatars/moon.png?v=goofy" },
+    { name: "Key", src: "/avatars/key.png?v=goofy" },
+    { name: "Teacup", src: "/avatars/teacup.png?v=goofy" },
+    { name: "Match", src: "/avatars/match.png?v=goofy" },
+    { name: "Bell", src: "/avatars/bell.png?v=goofy" },
+    { name: "Record", src: "/avatars/record.png?v=goofy" },
+    { name: "Hourglass", src: "/avatars/hourglass.png?v=goofy" },
+    { name: "Cat", src: "/avatars/cat.png?v=goofy" },
+    { name: "Hat", src: "/avatars/hat.png?v=goofy" },
 ] as const;
 
 export function avatarName(index: number) {

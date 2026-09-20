@@ -751,6 +751,7 @@ select:focus-visible,
   height: 1.45rem;
   display: block;
   object-fit: cover;
+  border-radius: 50%;
 }
 
 .seat-face {
@@ -760,7 +761,8 @@ select:focus-visible,
   height: 1.7rem;
   flex: none;
   overflow: hidden;
-  background: #0a0a0a;
+  border-radius: 50%;
+  background: #f3ead8;
 }
 
 .seat-face .face {
@@ -979,7 +981,8 @@ select:focus-visible,
   height: 1.7rem;
   flex: none;
   overflow: hidden;
-  background: #0a0a0a;
+  border-radius: 50%;
+  background: #f3ead8;
 }
 
 .pen-holder .face {
