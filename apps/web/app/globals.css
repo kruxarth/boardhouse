@@ -675,12 +675,27 @@ select:focus-visible,
   grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem 0.85rem;
+  gap: 0.55rem 1.1rem;
   align-items: center;
-  padding: 0.45rem 0.7rem;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
   border-bottom: 1px solid color-mix(in srgb, var(--color-pink) 28%, transparent);
   background: #000;
   z-index: 6;
+}
+
+/* Left is who is here. Right is what you can do. */
+.rail-left,
+.rail-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem 0.8rem;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.rail-right {
+  gap: 0.45rem;
 }
 
 .rail-name {
@@ -713,21 +728,115 @@ select:focus-visible,
 }
 
 .seat {
-  border: 1px solid color-mix(in srgb, var(--color-pink) 30%, transparent);
-  padding: 0.15rem 0.4rem;
+  position: relative;
+  border: 1px solid color-mix(in srgb, var(--color-pink) 26%, transparent);
+  padding: 0.18rem 0.3rem 0.18rem 0.22rem;
   display: flex;
-  gap: 0.35rem;
+  gap: 0.3rem;
   align-items: center;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
 }
 
 .seat .glyph {
-  width: 0.85rem;
-  height: 0.85rem;
+  width: 0.95rem;
+  height: 0.95rem;
 }
 
 .seat-me {
   border-color: var(--color-pink);
+}
+
+.face {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+}
+
+.seat-face {
+  display: grid;
+  place-items: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  flex: none;
+  color: var(--color-pink);
+  background: color-mix(in srgb, var(--color-pink) 12%, #000);
+}
+
+.seat-name {
+  max-width: 8rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat-host {
+  font-style: normal;
+  color: var(--color-mist);
+  font-size: 0.7rem;
+  margin-left: 0.3rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.seat-mic-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: pointer;
+}
+
+.seat-mic-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.seat-mic-btn:hover,
+.seat-mic-btn:focus-visible {
+  color: var(--color-paper);
+}
+
+/* Reactions rise off the face that sent them and clear themselves. */
+.seat-floats {
+  position: absolute;
+  left: 0.45rem;
+  top: 0;
+  width: 1.6rem;
+  height: 0;
+  pointer-events: none;
+}
+
+.float-emoji {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  font-size: 1.05rem;
+  line-height: 1;
+  animation: float-up 2.8s ease-out forwards;
+}
+
+@keyframes float-up {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(0.6);
+  }
+  14% {
+    opacity: 1;
+    transform: translateY(-0.5rem) scale(1.15);
+  }
+  30% {
+    transform: translateY(-1.1rem) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-3.6rem) scale(0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .float-emoji {
+    animation-duration: 1.6s;
+    animation-timing-function: linear;
+  }
 }
 
 .mic-off {
@@ -760,11 +869,6 @@ select:focus-visible,
   animation: lamp-halo 1.05s ease-in-out infinite;
 }
 
-.icon-btn-speaking {
-  animation: lamp-twinkle 1.05s ease-in-out infinite;
-  box-shadow: 0 0 0 1px var(--color-pink), 0 0 12px color-mix(in srgb, var(--color-pink) 55%, transparent);
-}
-
 @keyframes lamp-twinkle {
   0%,
   100% {
@@ -795,149 +899,244 @@ select:focus-visible,
   }
 }
 
-.rail-actions {
+.icon-btn-on {
+  background: var(--color-pink);
+  color: var(--color-ink);
+  border-color: var(--color-pink);
+}
+
+.pens {
   display: flex;
   align-items: center;
   gap: 0.4rem;
-  margin-left: auto;
 }
 
-.icon-btn-quiet {
-  width: 1.7rem;
-  height: 1.7rem;
-  border-color: transparent;
+.pen {
+  position: relative;
 }
 
-.icon-btn-quiet .glyph {
-  width: 0.95rem;
-  height: 0.95rem;
-}
-
-.marker-row {
-  display: flex;
-  gap: 0.35rem;
-}
-
-.pen-tray {
-  position: absolute;
-  left: 0.7rem;
-  top: 0.7rem;
-  z-index: 8;
-  display: flex;
-  flex-direction: column;
-  gap: 0.45rem;
-  width: min(15.5rem, calc(100% - 1.4rem));
-  padding: 0.55rem;
-  background: #efe6d4;
-  color: #1c1916;
-  box-shadow: 6px 8px 0 #1c1916;
-  pointer-events: auto;
-}
-
-.pen-card {
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-  padding: 0.45rem 0.5rem 0.5rem;
-  background: #f7f1e4;
-  border-left: 5px solid #1c1916;
-}
-
-.pen-one {
-  border-left-color: #e36b88;
-}
-
-.pen-two {
-  border-left-color: #1c1916;
-}
-
-.pen-card-head {
+/* A marker reads as the mark it makes plus the face holding it. */
+.pen-chip {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-}
-
-.pen-stick {
-  display: grid;
-  place-items: center;
-  width: 2.4rem;
-  height: 0.85rem;
-  flex: none;
-}
-
-.pen-one .pen-stick {
-  background: #e36b88;
-  color: #1c1916;
-  clip-path: polygon(0 18%, 72% 18%, 100% 50%, 72% 82%, 0 82%);
-}
-
-.pen-two .pen-stick {
-  background: #1c1916;
-  color: #efe6d4;
-  clip-path: polygon(0 18%, 72% 18%, 100% 50%, 72% 82%, 0 82%);
-}
-
-.pen-stick .glyph {
-  width: 0.8rem;
-  height: 0.8rem;
-}
-
-.pen-label,
-.pen-status {
-  margin: 0;
-}
-
-.pen-label {
-  font-family: var(--font-display);
-  font-size: 0.95rem;
-  line-height: 1.1;
-}
-
-.pen-status {
-  color: #5c5348;
-  font-size: 0.75rem;
-}
-
-.pen-verbs {
-  display: flex;
-  flex-wrap: wrap;
   gap: 0.3rem;
-}
-
-.pen-verb,
-.pen-pass select {
-  margin: 0;
-  border: 1px solid #1c1916;
-  background: #1c1916;
-  color: #efe6d4;
-  font: inherit;
-  font-size: 0.75rem;
-  padding: 0.22rem 0.5rem;
+  height: 2.35rem;
+  padding: 0.2rem 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--color-pink) 32%, transparent);
+  background: #000;
+  color: var(--color-paper);
   cursor: pointer;
+  overflow: hidden;
 }
 
-.pen-verb:hover,
-.pen-verb:focus-visible,
-.pen-pass select:hover,
-.pen-pass select:focus-visible {
-  background: #e36b88;
-  border-color: #e36b88;
-  color: #1c1916;
+.pen-chip:hover,
+.pen-chip:focus-visible,
+.pen-chip[aria-expanded="true"] {
+  border-color: var(--color-pink);
 }
 
-.pen-verb:disabled {
-  cursor: default;
-  background: transparent;
-  color: #5c5348;
+.pen-free .pen-chip {
   border-style: dashed;
 }
 
-.pen-pass {
-  display: inline-flex;
+.pen-mine .pen-chip {
+  border-color: var(--color-pink);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-pink) 45%, transparent);
 }
 
-.pen-pass select {
-  max-width: 7.5rem;
+.pen-asked .pen-chip {
+  border-color: var(--color-pink);
+  animation: lamp-twinkle 1.2s ease-in-out infinite;
+}
+
+/* The ink sits on a scrap of the board so the black marker is not black on black. */
+.pen-ink {
+  display: grid;
+  place-items: center;
+  width: 2.1rem;
+  height: 1.85rem;
+  flex: none;
+  background: var(--color-paper);
+}
+
+.ink-stroke {
+  width: 1.9rem;
+  height: 1rem;
+  display: block;
+}
+
+.pen-holder {
+  display: grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  flex: none;
+  color: var(--color-pink);
+}
+
+.pen-empty {
+  width: 1.15rem;
+  height: 1.15rem;
+  border: 1px dashed color-mix(in srgb, var(--color-pink) 55%, transparent);
+  border-radius: 50%;
+}
+
+/* Depleting bar: the ask window, visible without reading anything. */
+.pen-fuse,
+.pen-ask-fuse {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: calc(var(--left, 1) * 100%);
+  background: var(--color-pink);
+}
+
+.pen-note {
+  position: absolute;
+  top: calc(100% + 0.2rem);
+  right: 0;
+  white-space: nowrap;
+  font-size: 0.7rem;
+  color: var(--color-mist);
+  background: #000;
+  padding: 0.05rem 0.25rem;
+  border: 1px solid color-mix(in srgb, var(--color-pink) 25%, transparent);
+  z-index: 30;
+}
+
+.pen-asks {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.pen-ask {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.4rem 0.45rem;
+  background: #000;
+  border: 1px solid var(--color-pink);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--color-pink) 30%, transparent);
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
+.pen-ask-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--color-pink);
+}
+
+.pen-ask-who .face {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.pen-menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 45;
+  min-width: 11rem;
+  max-height: 17rem;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: #000;
+  border: 1px solid var(--color-pink);
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.pen-menu-head {
+  margin: 0.1rem 0.35rem 0.25rem;
+  font-family: var(--font-display);
+  color: var(--color-pink);
+  font-size: 0.92rem;
+}
+
+.pen-menu-kicker {
+  margin: 0.35rem 0.35rem 0.15rem;
+  color: var(--color-mist);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.pen-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-height: 2rem;
+  padding: 0.25rem 0.35rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-paper);
+  font: inherit;
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pen-item:hover,
+.pen-item:focus-visible {
+  background: color-mix(in srgb, var(--color-pink) 18%, #000);
+  color: var(--color-pink);
+}
+
+.pen-item .glyph,
+.pen-item .face {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: none;
+  color: var(--color-pink);
+}
+
+.pen-item-host {
+  color: var(--color-mist);
+}
+
+.react-bar {
+  position: relative;
+  display: flex;
+}
+
+.react-tray {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 45;
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.25rem;
+  background: #000;
+  border: 1px solid var(--color-pink);
+}
+
+.react-key {
+  width: 2.1rem;
+  height: 2.1rem;
+  border: 0;
+  background: transparent;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.react-key:hover,
+.react-key:focus-visible {
+  background: color-mix(in srgb, var(--color-pink) 20%, #000);
+  transform: scale(1.12);
 }
 
 .board-wrap {
@@ -957,10 +1156,6 @@ select:focus-visible,
 
 .board-wrap .board-frame {
   flex: 1;
-}
-
-.board-wrap:has(.sitting-recap) .pen-tray {
-  display: none;
 }
 
 .sitting-recap {
@@ -1176,6 +1371,21 @@ select:focus-visible,
   font-size: 0.78rem;
 }
 
+.knock-who {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--color-paper);
+}
+
+.knock-who .face {
+  width: 1.2rem;
+  height: 1.2rem;
+  flex: none;
+  color: var(--color-pink);
+}
+
 .hear-banner {
   display: flex;
   flex-wrap: wrap;
@@ -1298,13 +1508,11 @@ select:focus-visible,
   }
 
   .seat-mic-speaking,
-  .seat-mic-speaking::after,
-  .icon-btn-speaking {
+  .seat-mic-speaking::after {
     animation: none !important;
   }
 
-  .seat-mic-speaking,
-  .icon-btn-speaking {
+  .seat-mic-speaking {
     opacity: 1;
     filter: drop-shadow(0 0 6px var(--color-pink));
   }
@@ -1354,8 +1562,21 @@ select:focus-visible,
 }
 
 @media (max-width: 720px) {
-  .rail-actions {
-    margin-left: 0;
+  .table-rail {
+    justify-content: flex-start;
+  }
+
+  .rail-left,
+  .rail-right {
+    width: 100%;
+  }
+
+  .rail-right {
+    justify-content: flex-end;
+  }
+
+  .seat-name {
+    max-width: 5.5rem;
   }
 
   .table-queues {

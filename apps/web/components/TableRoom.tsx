@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { RoomStatePayload } from "@repo/common/types";
+import type { AskOutcome, RoomStatePayload } from "@repo/common/types";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { useSocket } from "../hooks/useSocket";
 import { useVoice } from "../hooks/useVoice";
@@ -12,7 +12,17 @@ import type { BoardHandle, RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
 import type { RecapEvent } from "./SittingRecap";
-import { doorCopy, TableShell, type MarkerAsk, type TableModel } from "./TableShell";
+import {
+    doorCopy,
+    TableShell,
+    type AskResult,
+    type LiveReaction,
+    type MarkerAsk,
+    type PendingAsk,
+    type TableModel,
+} from "./TableShell";
+
+const REACTION_LIFE_MS = 2_800;
 
 type DoorKind =
     | "need-name"
@@ -59,7 +69,9 @@ export function TableRoom({
     const [remoteScene, setRemoteScene] = useState<unknown>(null);
     const [cursors, setCursors] = useState<RemoteCursor[]>([]);
     const [asks, setAsks] = useState<MarkerAsk[]>([]);
-    const [keptTick, setKeptTick] = useState<{ slot: 0 | 1; n: number } | null>(null);
+    const [pendingAsk, setPendingAsk] = useState<PendingAsk | null>(null);
+    const [askResult, setAskResult] = useState<AskResult | null>(null);
+    const [reactions, setReactions] = useState<LiveReaction[]>([]);
     const [now, setNow] = useState(Date.now());
     const [toast, setToast] = useState<string | null>(null);
     const [namePending, setNamePending] = useState(false);
@@ -336,9 +348,7 @@ export function TableRoom({
                 if (slots) {
                     setTable((current) => (current ? { ...current, markers: slots } : current));
                     setAsks((current) =>
-                        slots[0] === session.participantId || slots[1] === session.participantId
-                            ? current.filter((item) => slots[item.slot] === session.participantId)
-                            : []
+                        current.filter((item) => slots[item.slot] === session.participantId)
                     );
                 }
                 return;
@@ -353,7 +363,9 @@ export function TableRoom({
                                 requestId: String(row.requestId ?? ""),
                                 fromParticipantId: String(row.fromParticipantId ?? ""),
                                 fromName: String(row.fromName ?? "Someone"),
+                                fromAvatar: Number(row.fromAvatar) || 0,
                                 slot: row.slot === 1 ? 1 : 0,
+                                expiresAt: String(row.expiresAt ?? ""),
                             };
                             return parsed;
                         })
@@ -361,27 +373,40 @@ export function TableRoom({
                 );
                 return;
             }
-            if (type === "marker_ask") {
-                const next: MarkerAsk = {
-                    requestId: String(message.requestId),
-                    fromParticipantId: String(message.fromParticipantId),
-                    fromName: String(message.fromName ?? "Someone"),
-                    slot: message.slot === 1 ? 1 : 0,
-                };
-                setAsks((current) => {
-                    if (current.some((item) => item.requestId === next.requestId)) {
-                        return current;
-                    }
-                    return [...current, next];
-                });
+            if (type === "marker_ask_state") {
+                const row = message.ask as Record<string, unknown> | null | undefined;
+                setPendingAsk(
+                    row
+                        ? {
+                              requestId: String(row.requestId ?? ""),
+                              slot: row.slot === 1 ? 1 : 0,
+                              holderId: String(row.holderId ?? ""),
+                              holderName: String(row.holderName ?? "someone"),
+                              expiresAt: String(row.expiresAt ?? ""),
+                          }
+                        : null
+                );
                 return;
             }
-            if (type === "marker_kept") {
-                setKeptTick((current) => ({
+            if (type === "marker_ask_done") {
+                const outcome = String(message.outcome ?? "lapsed") as AskOutcome;
+                setAskResult((current) => ({
                     slot: message.slot === 1 ? 1 : 0,
+                    outcome,
                     n: (current?.n ?? 0) + 1,
                 }));
-                setToast("They kept the pen");
+                return;
+            }
+            if (type === "reaction") {
+                const item: LiveReaction = {
+                    id: String(message.id ?? Math.random()),
+                    participantId: String(message.participantId ?? ""),
+                    emoji: String(message.emoji ?? ""),
+                };
+                setReactions((current) => [...current, item]);
+                window.setTimeout(() => {
+                    setReactions((current) => current.filter((row) => row.id !== item.id));
+                }, REACTION_LIFE_MS);
                 return;
             }
             if (type === "canvas_snapshot") {
@@ -592,7 +617,9 @@ export function TableRoom({
                 remoteScene={remoteScene}
                 cursors={cursors.filter((cursor) => cursor.id !== session.participantId)}
                 asks={asks}
-                keptTick={keptTick}
+                pendingAsk={pendingAsk}
+                askResult={askResult}
+                reactions={reactions}
                 now={now}
                 voiceConfigured={voice.configured}
                 voiceUnlockNeeded={voice.configured === true && voice.unlockNeeded}
@@ -605,12 +632,19 @@ export function TableRoom({
                 onTake={(slot) => send({ type: "take_marker", slot })}
                 onDrop={(slot) => send({ type: "drop_marker", slot })}
                 onGive={(slot, toParticipantId) => send({ type: "give_marker", slot, toParticipantId })}
-                onAsk={(fromParticipantId) => send({ type: "ask_marker", fromParticipantId })}
+                onAsk={(slot) => send({ type: "ask_marker", slot })}
+                onCancelAsk={() => {
+                    send({ type: "cancel_ask" });
+                    setPendingAsk(null);
+                }}
                 onAnswer={(requestId, give) => {
                     send({ type: "answer_marker", requestId, give });
                     setAsks((current) => current.filter((item) => item.requestId !== requestId));
                 }}
                 onHostTake={(slot) => send({ type: "host_take_marker", slot })}
+                onHostGive={(slot, toParticipantId) =>
+                    send({ type: "host_give_marker", slot, toParticipantId })
+                }
                 onAdmit={(participantId) => send({ type: "admit", participantId })}
                 onDeny={(participantId) => send({ type: "deny", participantId })}
                 onMode={(accessMode) => send({ type: "set_mode", accessMode })}
@@ -620,6 +654,7 @@ export function TableRoom({
                 onMic={() => void toggleMic()}
                 onAllowMic={() => void allowMic()}
                 onListenOnly={() => void listenOnly()}
+                onReact={(emoji) => send({ type: "react", emoji })}
                 onReplay={requestReplay}
                 onSaveImage={() => void saveImage()}
                 onSaveBoard={saveBoard}

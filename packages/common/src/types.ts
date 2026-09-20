@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { REACTIONS } from "./constants";
 
 export const AccessModeSchema = z.enum(["knock", "open"]);
 export type AccessMode = z.infer<typeof AccessModeSchema>;
@@ -8,7 +9,7 @@ export const CreateSessionSchema = z.object({
 });
 
 export const CreateRoomSchema = z.object({
-    name: z.string().trim().min(1).max(40).optional(),
+    name: z.string().trim().min(1).max(40),
 });
 
 export const MarkerSlotSchema = z.union([z.literal(0), z.literal(1)]);
@@ -60,7 +61,11 @@ export const TakeMarkerMessageSchema = z.object({
 
 export const AskMarkerMessageSchema = z.object({
     type: z.literal("ask_marker"),
-    fromParticipantId: z.string().min(1).max(100),
+    slot: MarkerSlotSchema,
+});
+
+export const CancelAskMessageSchema = z.object({
+    type: z.literal("cancel_ask"),
 });
 
 export const AnswerMarkerMessageSchema = z.object({
@@ -114,6 +119,11 @@ export const SetMutedMessageSchema = z.object({
     muted: z.boolean(),
 });
 
+export const ReactMessageSchema = z.object({
+    type: z.literal("react"),
+    emoji: z.enum(REACTIONS),
+});
+
 export const GetReplayMessageSchema = z.object({
     type: z.literal("get_replay"),
 });
@@ -129,6 +139,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     EndRoomMessageSchema,
     TakeMarkerMessageSchema,
     AskMarkerMessageSchema,
+    CancelAskMessageSchema,
     AnswerMarkerMessageSchema,
     DropMarkerMessageSchema,
     GiveMarkerMessageSchema,
@@ -138,6 +149,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     CursorMessageSchema,
     MuteParticipantMessageSchema,
     SetMutedMessageSchema,
+    ReactMessageSchema,
     GetReplayMessageSchema,
 ]);
 
@@ -147,7 +159,19 @@ export type PresencePerson = {
     id: string;
     name: string;
     muted: boolean;
+    avatar: number;
 };
+
+/** What the asker sees while their own request is in flight. */
+export type PendingAsk = {
+    requestId: string;
+    slot: MarkerSlot;
+    holderId: string;
+    holderName: string;
+    expiresAt: string;
+};
+
+export type AskOutcome = "given" | "kept" | "lapsed";
 
 export type RoomStatePayload = {
     type: "room_state";

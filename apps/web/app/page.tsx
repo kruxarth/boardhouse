@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ClaimTable } from "../components/ClaimTable";
 import { RoofArt, SkyArt } from "../components/HouseArt";
 import { HouseWindow } from "../components/HouseWindow";
-import { NameGate } from "../components/NameGate";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
@@ -14,7 +14,6 @@ export default function Home() {
     const { session, setSession, ready } = useLocalSession();
     const [occupancy, setOccupancy] = useState<Occupancy | null>(null);
     const [houseDown, setHouseDown] = useState(false);
-    const [label, setLabel] = useState("");
     const [link, setLink] = useState("");
     const [error, setError] = useState("");
     const [pending, setPending] = useState(false);
@@ -47,13 +46,20 @@ export default function Home() {
     const houseFull = occupancy !== null && occupancy.used >= occupancy.max;
     const tables = occupancy?.tables ?? null;
 
-    async function openTable(name?: string) {
+    async function openTable(payload: { name?: string; tableName: string }) {
+        const sittingName = payload.tableName.trim();
+        if (!sittingName) {
+            setError("Name this sitting");
+            setClaiming(true);
+            return;
+        }
+
         setError("");
         setPending(true);
         try {
-            const nextSession = await sessionForSitting(readSession(), name);
+            const nextSession = await sessionForSitting(readSession(), payload.name);
             setSession(nextSession);
-            const room = await createRoom(nextSession.token, label.trim() || undefined);
+            const room = await createRoom(nextSession.token, sittingName);
             rememberHostKey(room.slug, room.hostKey);
             router.push(room.hostPath);
         } catch (err) {
@@ -81,14 +87,10 @@ export default function Home() {
         if (houseFull || pending) {
             return;
         }
-        if (!readSession()) {
-            if (session) {
-                setSession(null);
-            }
-            setClaiming(true);
-            return;
+        if (!readSession() && session) {
+            setSession(null);
         }
-        void openTable();
+        setClaiming(true);
     }
 
     function openLink(event: React.FormEvent) {
@@ -187,13 +189,12 @@ export default function Home() {
                             <div className="frontdoor">
                                 <div className="frontdoor-arch">
                                     <span className="knob" aria-hidden="true" />
-                                    {ready && claiming && !session ? (
+                                    {ready && claiming ? (
                                         <>
-                                            <NameGate
-                                                title="What should we call you?"
-                                                submitLabel="Sit down"
+                                            <ClaimTable
+                                                needName={!session}
                                                 pending={pending}
-                                                onSubmit={(name) => void openTable(name)}
+                                                onSubmit={(payload) => void openTable(payload)}
                                             />
                                             <button
                                                 className="btn btn-ghost"
@@ -220,23 +221,11 @@ export default function Home() {
                                                     Walk in
                                                 </button>
                                             </form>
-                                            {ready && session && !houseFull ? (
-                                                <div className="frontdoor-claim">
-                                                    <input
-                                                        className="field"
-                                                        maxLength={40}
-                                                        onChange={(event) => setLabel(event.target.value)}
-                                                        placeholder="Name this table, if you want"
-                                                        value={label}
-                                                    />
-                                                    <p className="frontdoor-hint">
-                                                        Then pick a dark window.
-                                                    </p>
-                                                </div>
-                                            ) : null}
-                                            {!session && !houseFull ? (
+                                            {ready && !houseFull ? (
                                                 <p className="frontdoor-hint">
-                                                    No key? Pick a dark window and sit down.
+                                                    {session
+                                                        ? "Pick a dark window and name the table."
+                                                        : "No key? Pick a dark window and sit down."}
                                                 </p>
                                             ) : null}
                                         </>

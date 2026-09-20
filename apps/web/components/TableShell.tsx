@@ -1,22 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import type { PresencePerson } from "@repo/common/types";
-import { BoardCanvas, type BoardHandle, type RemoteCursor } from "./BoardCanvas";
+import { ASK_WINDOW_MS, REACTIONS } from "@repo/common/constants";
+import { BoardCanvas, MARKER_INK, type BoardHandle, type RemoteCursor } from "./BoardCanvas";
+import { Avatar } from "./Avatars";
 import {
+    AskIcon,
     CloseIcon,
     DoorIcon,
     DownloadIcon,
     DrawerIcon,
     FileIcon,
+    GrabIcon,
+    InkStroke,
     KeyIcon,
     LinkIcon,
-    MarkerOneIcon,
-    MarkerTwoIcon,
     MicIcon,
     MicOffIcon,
     PlayIcon,
+    PutDownIcon,
     RotateIcon,
+    SmileIcon,
     WipeIcon,
 } from "./Icons";
 import { SittingRecap, type RecapEvent } from "./SittingRecap";
@@ -27,8 +32,22 @@ export type MarkerAsk = {
     requestId: string;
     fromParticipantId: string;
     fromName: string;
+    fromAvatar: number;
     slot: 0 | 1;
+    expiresAt: string;
 };
+
+export type PendingAsk = {
+    requestId: string;
+    slot: 0 | 1;
+    holderId: string;
+    holderName: string;
+    expiresAt: string;
+};
+
+export type AskResult = { slot: 0 | 1; outcome: "given" | "kept" | "lapsed"; n: number };
+
+export type LiveReaction = { id: string; participantId: string; emoji: string };
 
 export type TableModel = {
     slug: string;
@@ -45,6 +64,11 @@ export type TableModel = {
 };
 
 const MARKER_NAMES = ["Pink marker", "Black marker"] as const;
+const RESULT_NOTE = {
+    kept: "kept it",
+    lapsed: "no answer",
+    given: "yours",
+} as const;
 
 function remainingLabel(expiresAt: string, now: number) {
     const ms = new Date(expiresAt).getTime() - now;
@@ -63,11 +87,22 @@ function remainingLabel(expiresAt: string, now: number) {
     return `${seconds}s left`;
 }
 
-function personName(seats: PresencePerson[], id: string | null) {
-    if (!id) {
-        return null;
-    }
-    return seats.find((seat) => seat.id === id)?.name ?? "someone";
+/** The pen fuses run on a 9s window, so the once-a-second room clock is too coarse. */
+function useFuse(active: boolean) {
+    const [tick, setTick] = useState(() => Date.now());
+    useEffect(() => {
+        if (!active) {
+            return;
+        }
+        const timer = window.setInterval(() => setTick(Date.now()), 120);
+        return () => window.clearInterval(timer);
+    }, [active]);
+    return active ? tick : 0;
+}
+
+function fuseLeft(expiresAt: string, tick: number) {
+    const ms = new Date(expiresAt).getTime() - (tick || Date.now());
+    return Math.max(0, Math.min(1, ms / ASK_WINDOW_MS));
 }
 
 export function TableShell({
@@ -80,7 +115,9 @@ export function TableShell({
     remoteScene,
     cursors,
     asks,
-    keptTick,
+    pendingAsk,
+    askResult,
+    reactions,
     now,
     voiceConfigured,
     voiceUnlockNeeded,
@@ -92,8 +129,10 @@ export function TableShell({
     onDrop,
     onGive,
     onAsk,
+    onCancelAsk,
     onAnswer,
     onHostTake,
+    onHostGive,
     onAdmit,
     onDeny,
     onMode,
@@ -103,6 +142,7 @@ export function TableShell({
     onMic,
     onAllowMic,
     onListenOnly,
+    onReact,
     onReplay,
     onSaveImage,
     onSaveBoard,
@@ -121,7 +161,9 @@ export function TableShell({
     remoteScene: unknown;
     cursors: RemoteCursor[];
     asks: MarkerAsk[];
-    keptTick: { slot: 0 | 1; n: number } | null;
+    pendingAsk: PendingAsk | null;
+    askResult: AskResult | null;
+    reactions: LiveReaction[];
     now: number;
     voiceConfigured: boolean | null;
     voiceUnlockNeeded: boolean;
@@ -132,9 +174,11 @@ export function TableShell({
     onTake: (slot: 0 | 1) => void;
     onDrop: (slot: 0 | 1) => void;
     onGive: (slot: 0 | 1, toParticipantId: string) => void;
-    onAsk: (holderId: string) => void;
+    onAsk: (slot: 0 | 1) => void;
+    onCancelAsk: () => void;
     onAnswer: (requestId: string, give: boolean) => void;
     onHostTake: (slot: 0 | 1) => void;
+    onHostGive: (slot: 0 | 1, toParticipantId: string) => void;
     onAdmit: (participantId: string) => void;
     onDeny: (participantId: string) => void;
     onMode: (mode: "knock" | "open") => void;
@@ -144,6 +188,7 @@ export function TableShell({
     onMic: () => void;
     onAllowMic: () => void;
     onListenOnly: () => void;
+    onReact: (emoji: string) => void;
     onReplay: () => void;
     onSaveImage: () => void;
     onSaveBoard: () => void;
@@ -154,41 +199,35 @@ export function TableShell({
 }) {
     const [confirmEnd, setConfirmEnd] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
-    const [askedSlots, setAskedSlots] = useState<Partial<Record<0 | 1, true>>>({});
+    const [note, setNote] = useState<{ slot: 0 | 1; text: string } | null>(null);
     const isHost = Boolean(table && table.hostParticipantId === me.id);
     const guestUrl = table ? `${typeof window !== "undefined" ? window.location.origin : ""}/room/${table.slug}` : "";
-    const hostUrl =
-        table && hostKey
-            ? `${guestUrl}?host=${hostKey}`
-            : "";
-
-    const asked = useMemo(() => {
-        const next: Partial<Record<0 | 1, true>> = {};
-        if (!table) {
-            return next;
-        }
-        for (const slot of [0, 1] as const) {
-            const holder = table.markers[slot];
-            if (askedSlots[slot] && holder && holder !== me.id) {
-                next[slot] = true;
-            }
-        }
-        return next;
-    }, [askedSlots, me.id, table]);
+    const hostUrl = table && hostKey ? `${guestUrl}?host=${hostKey}` : "";
 
     useEffect(() => {
-        if (!keptTick) {
+        if (!askResult) {
             return;
         }
-        setAskedSlots((current) => {
-            if (!current[keptTick.slot]) {
-                return current;
-            }
-            const next = { ...current };
-            delete next[keptTick.slot];
-            return next;
-        });
-    }, [keptTick]);
+        setNote({ slot: askResult.slot, text: RESULT_NOTE[askResult.outcome] });
+        const timer = window.setTimeout(() => setNote(null), 2600);
+        return () => window.clearTimeout(timer);
+    }, [askResult]);
+
+    const seats = table?.seats ?? [];
+    // Your own row stays first so the mic toggle never moves as people come and go.
+    const ordered = useMemo(() => {
+        const mine = seats.filter((seat) => seat.id === me.id);
+        const rest = seats.filter((seat) => seat.id !== me.id);
+        return [...mine, ...rest];
+    }, [seats, me.id]);
+
+    const byId = useMemo(() => {
+        const map = new Map<string, PresencePerson>();
+        for (const seat of seats) {
+            map.set(seat.id, seat);
+        }
+        return map;
+    }, [seats]);
 
     if (door !== "joined" || !table) {
         return null;
@@ -197,82 +236,60 @@ export function TableShell({
     return (
         <div className={drawerOpen ? "table-shell drawer-open" : "table-shell"}>
             <header className="table-rail">
-                <div className="rail-brand">
-                    <p className="rail-name">{table.name || "Untitled sitting"}</p>
-                    <p className="rail-meta">
-                        {table.usedSeats} / {table.maxSeats} seats
-                        <span className="fuse">{remainingLabel(table.expiresAt, now)}</span>
-                    </p>
-                </div>
-                <ul className="seats">
-                    {table.seats.map((seat) => {
-                        const speaking = speakingIds.includes(seat.id) && !seat.muted;
-                        return (
-                            <li
+                <div className="rail-left">
+                    <div className="rail-brand">
+                        <p className="rail-name">{table.name || "Untitled sitting"}</p>
+                        <p className="rail-meta">
+                            {table.usedSeats} / {table.maxSeats} seats
+                            <span className="fuse">{remainingLabel(table.expiresAt, now)}</span>
+                        </p>
+                    </div>
+                    <ul className="seats">
+                        {ordered.map((seat) => (
+                            <SeatChip
                                 key={seat.id}
-                                className={seat.id === me.id ? "seat seat-me" : "seat"}
-                            >
-                                <span className="seat-name">
-                                    {seat.name}
-                                    {seat.id === table.hostParticipantId ? " (host)" : ""}
-                                </span>
-                                <span
-                                    className={
-                                        seat.muted
-                                            ? "seat-mic mic-off"
-                                            : speaking
-                                              ? "seat-mic mic-on seat-mic-speaking"
-                                              : "seat-mic mic-on"
-                                    }
-                                >
-                                    <span aria-hidden="true">
-                                        {seat.muted ? <MicOffIcon /> : <MicIcon />}
-                                    </span>
-                                    {speaking ? <span className="sr-only">speaking</span> : null}
-                                </span>
-                                {isHost && seat.id !== me.id ? (
-                                    <button
-                                        aria-label={`Mute ${seat.name}`}
-                                        className="icon-btn icon-btn-quiet"
-                                        onClick={() => onMute(seat.id)}
-                                        title={`Mute ${seat.name}`}
-                                        type="button"
-                                    >
-                                        <MicOffIcon />
-                                    </button>
-                                ) : null}
-                            </li>
-                        );
-                    })}
-                </ul>
-                <div className="rail-actions">
-                    <button
-                        aria-label={
-                            voiceConfigured === false
-                                ? "Voice not configured"
-                                : micOn
-                                  ? "Mute microphone"
-                                  : "Unmute microphone"
-                        }
-                        aria-pressed={micOn}
-                        className={
-                            micOn && speakingIds.includes(me.id)
-                                ? "icon-btn icon-btn-speaking"
-                                : "icon-btn"
-                        }
-                        disabled={voiceConfigured === false}
-                        onClick={onMic}
-                        title={
-                            voiceConfigured === false
-                                ? "Voice not configured"
-                                : micOn
-                                  ? "Mic on"
-                                  : "Mic off"
-                        }
-                        type="button"
-                    >
-                        {micOn ? <MicIcon /> : <MicOffIcon />}
-                    </button>
+                                seat={seat}
+                                isMe={seat.id === me.id}
+                                isTheHost={seat.id === table.hostParticipantId}
+                                iAmHost={isHost}
+                                speaking={speakingIds.includes(seat.id) && !seat.muted}
+                                micOn={micOn}
+                                voiceConfigured={voiceConfigured}
+                                reactions={reactions.filter((item) => item.participantId === seat.id)}
+                                onMic={onMic}
+                                onMute={onMute}
+                            />
+                        ))}
+                    </ul>
+                </div>
+
+                <div className="rail-right">
+                    <div className="pens" aria-label="Markers">
+                        {([0, 1] as const).map((slot) => (
+                            <Pen
+                                key={slot}
+                                slot={slot}
+                                meId={me.id}
+                                holder={byId.get(table.markers[slot] ?? "") ?? null}
+                                seats={seats}
+                                isHost={isHost}
+                                incoming={asks.filter((ask) => ask.slot === slot)}
+                                pending={pendingAsk?.slot === slot ? pendingAsk : null}
+                                note={note?.slot === slot ? note.text : null}
+                                onTake={onTake}
+                                onDrop={onDrop}
+                                onGive={onGive}
+                                onAsk={onAsk}
+                                onCancelAsk={onCancelAsk}
+                                onAnswer={onAnswer}
+                                onHostTake={onHostTake}
+                                onHostGive={onHostGive}
+                            />
+                        ))}
+                    </div>
+
+                    <ReactionBar onReact={onReact} />
+
                     <button
                         aria-controls="table-drawer"
                         aria-expanded={drawerOpen}
@@ -304,55 +321,27 @@ export function TableShell({
                         </button>
                     </div>
                 ) : null}
-                {(isHost && table.waiters.length > 0) || asks.length > 0 ? (
+                {isHost && table.waiters.length > 0 ? (
                     <div className="table-queues">
-                        {isHost && table.waiters.length > 0 ? (
-                            <aside className="knock-list">
-                                <p>At the door</p>
-                                <ul>
-                                    {table.waiters.map((waiter) => (
-                                        <li key={waiter.id}>
-                                            <span>{waiter.name}</span>
-                                            <button className="btn btn-brass" onClick={() => onAdmit(waiter.id)} type="button">
-                                                Admit
-                                            </button>
-                                            <button className="btn btn-ghost" onClick={() => onDeny(waiter.id)} type="button">
-                                                Deny
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </aside>
-                        ) : null}
-                        {asks.length > 0 ? (
-                            <aside className="knock-list">
-                                <p>Want a pen</p>
-                                <ul>
-                                    {asks.map((ask) => (
-                                        <li key={ask.requestId}>
-                                            <span>
-                                                {ask.fromName}
-                                                <em> · {MARKER_NAMES[ask.slot]}</em>
-                                            </span>
-                                            <button
-                                                className="btn btn-brass"
-                                                onClick={() => onAnswer(ask.requestId, true)}
-                                                type="button"
-                                            >
-                                                Pass
-                                            </button>
-                                            <button
-                                                className="btn btn-ghost"
-                                                onClick={() => onAnswer(ask.requestId, false)}
-                                                type="button"
-                                            >
-                                                Keep
-                                            </button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            </aside>
-                        ) : null}
+                        <aside className="knock-list">
+                            <p>At the door</p>
+                            <ul>
+                                {table.waiters.map((waiter) => (
+                                    <li key={waiter.id}>
+                                        <span className="knock-who">
+                                            <Avatar index={waiter.avatar} />
+                                            {waiter.name}
+                                        </span>
+                                        <button className="btn btn-brass" onClick={() => onAdmit(waiter.id)} type="button">
+                                            Admit
+                                        </button>
+                                        <button className="btn btn-ghost" onClick={() => onDeny(waiter.id)} type="button">
+                                            Deny
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </aside>
                     </div>
                 ) : null}
                 <BoardCanvas
@@ -368,28 +357,6 @@ export function TableShell({
                     onScene={onScene}
                     onCursor={onCursor}
                 />
-                <div className="pen-tray" aria-label="Markers">
-                    {([0, 1] as const).map((slot) => (
-                        <Pen
-                            key={slot}
-                            slot={slot}
-                            holderId={table.markers[slot]}
-                            holderName={personName(table.seats, table.markers[slot])}
-                            meId={me.id}
-                            seats={table.seats}
-                            isHost={isHost}
-                            asked={Boolean(asked[slot])}
-                            onTake={onTake}
-                            onDrop={onDrop}
-                            onGive={onGive}
-                            onAsk={(holderId) => {
-                                setAskedSlots((current) => ({ ...current, [slot]: true }));
-                                onAsk(holderId);
-                            }}
-                            onHostTake={onHostTake}
-                        />
-                    ))}
-                </div>
                 {recapEvents ? (
                     <SittingRecap events={recapEvents} onClose={onCloseRecap} />
                 ) : null}
@@ -478,114 +445,420 @@ export function TableShell({
     );
 }
 
+function SeatChip({
+    seat,
+    isMe,
+    isTheHost,
+    iAmHost,
+    speaking,
+    micOn,
+    voiceConfigured,
+    reactions,
+    onMic,
+    onMute,
+}: {
+    seat: PresencePerson;
+    isMe: boolean;
+    isTheHost: boolean;
+    iAmHost: boolean;
+    speaking: boolean;
+    micOn: boolean;
+    voiceConfigured: boolean | null;
+    reactions: LiveReaction[];
+    onMic: () => void;
+    onMute: (participantId: string) => void;
+}) {
+    const live = isMe ? micOn : !seat.muted;
+    const micClass = `seat-mic${live ? " mic-on" : " mic-off"}${speaking ? " seat-mic-speaking" : ""}`;
+
+    return (
+        <li className={isMe ? "seat seat-me" : "seat"}>
+            <span className="seat-face">
+                <Avatar index={seat.avatar} />
+            </span>
+            <span className="seat-name">
+                {seat.name}
+                {isTheHost ? <em className="seat-host">host</em> : null}
+            </span>
+            {isMe ? (
+                <button
+                    aria-label={micOn ? "Mute yourself" : "Unmute yourself"}
+                    aria-pressed={micOn}
+                    className={`${micClass} seat-mic-btn`}
+                    disabled={voiceConfigured === false}
+                    onClick={onMic}
+                    title={
+                        voiceConfigured === false
+                            ? "Voice not configured"
+                            : micOn
+                              ? "Mic on"
+                              : "Mic off"
+                    }
+                    type="button"
+                >
+                    {micOn ? <MicIcon /> : <MicOffIcon />}
+                </button>
+            ) : iAmHost && !seat.muted ? (
+                <button
+                    aria-label={`Mute ${seat.name}`}
+                    className={`${micClass} seat-mic-btn`}
+                    onClick={() => onMute(seat.id)}
+                    title={`Mute ${seat.name}`}
+                    type="button"
+                >
+                    <MicIcon />
+                </button>
+            ) : (
+                <span className={micClass}>
+                    <span aria-hidden="true">{seat.muted ? <MicOffIcon /> : <MicIcon />}</span>
+                    {speaking ? <span className="sr-only">speaking</span> : null}
+                </span>
+            )}
+            <span aria-hidden="true" className="seat-floats">
+                {reactions.map((item) => (
+                    <span className="float-emoji" key={item.id}>
+                        {item.emoji}
+                    </span>
+                ))}
+            </span>
+        </li>
+    );
+}
+
+function ReactionBar({ onReact }: { onReact: (emoji: string) => void }) {
+    const [open, setOpen] = useState(false);
+    const wrap = useRef<HTMLDivElement | null>(null);
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+        function onDown(event: PointerEvent) {
+            if (!wrap.current?.contains(event.target as Node)) {
+                setOpen(false);
+            }
+        }
+        function onKey(event: KeyboardEvent) {
+            if (event.key === "Escape") {
+                setOpen(false);
+            }
+        }
+        document.addEventListener("pointerdown", onDown);
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("pointerdown", onDown);
+            document.removeEventListener("keydown", onKey);
+        };
+    }, [open]);
+
+    return (
+        <div className="react-bar" ref={wrap}>
+            <button
+                aria-expanded={open}
+                aria-label="React"
+                className={open ? "icon-btn icon-btn-on" : "icon-btn"}
+                onClick={() => setOpen((value) => !value)}
+                title="React"
+                type="button"
+            >
+                <SmileIcon />
+            </button>
+            {open ? (
+                <div className="react-tray" role="menu">
+                    {REACTIONS.map((emoji) => (
+                        <button
+                            aria-label={`React ${emoji}`}
+                            className="react-key"
+                            key={emoji}
+                            onClick={() => {
+                                onReact(emoji);
+                                setOpen(false);
+                            }}
+                            role="menuitem"
+                            type="button"
+                        >
+                            {emoji}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 function Pen({
     slot,
-    holderId,
-    holderName,
     meId,
+    holder,
     seats,
     isHost,
-    asked,
+    incoming,
+    pending,
+    note,
     onTake,
     onDrop,
     onGive,
     onAsk,
+    onCancelAsk,
+    onAnswer,
     onHostTake,
+    onHostGive,
 }: {
     slot: 0 | 1;
-    holderId: string | null;
-    holderName: string | null;
     meId: string;
+    holder: PresencePerson | null;
     seats: PresencePerson[];
     isHost: boolean;
-    asked: boolean;
+    incoming: MarkerAsk[];
+    pending: PendingAsk | null;
+    note: string | null;
     onTake: (slot: 0 | 1) => void;
     onDrop: (slot: 0 | 1) => void;
     onGive: (slot: 0 | 1, toParticipantId: string) => void;
-    onAsk: (holderId: string) => void;
+    onAsk: (slot: 0 | 1) => void;
+    onCancelAsk: () => void;
+    onAnswer: (requestId: string, give: boolean) => void;
     onHostTake: (slot: 0 | 1) => void;
+    onHostGive: (slot: 0 | 1, toParticipantId: string) => void;
 }) {
-    const others = seats.filter((seat) => seat.id !== meId);
-    const mine = holderId === meId;
-    const free = holderId === null;
+    const [open, setOpen] = useState(false);
+    const wrap = useRef<HTMLDivElement | null>(null);
+    const openTimer = useRef<number | undefined>(undefined);
+    const closeTimer = useRef<number | undefined>(undefined);
+    const touched = useRef(false);
+
+    const mine = holder?.id === meId;
+    const free = holder === null;
     const label = MARKER_NAMES[slot];
-    const who = holderName ?? "someone";
-    const Icon = slot === 0 ? MarkerOneIcon : MarkerTwoIcon;
+    const others = seats.filter((seat) => seat.id !== meId);
+    const hostGiveTo = isHost && !mine ? others.filter((seat) => seat.id !== holder?.id) : [];
+    const showHost = isHost && !mine && (!free || hostGiveTo.length > 0);
+    const asked = incoming.length > 0;
+    const tick = useFuse(asked || Boolean(pending));
+
+    const clearTimers = useCallback(() => {
+        window.clearTimeout(openTimer.current);
+        window.clearTimeout(closeTimer.current);
+    }, []);
+
+    const close = useCallback(() => {
+        clearTimers();
+        setOpen(false);
+    }, [clearTimers]);
+
+    useEffect(() => () => clearTimers(), [clearTimers]);
+
+    useEffect(() => {
+        if (asked) {
+            setOpen(false);
+        }
+    }, [asked]);
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+        function onDown(event: PointerEvent) {
+            if (!wrap.current?.contains(event.target as Node)) {
+                setOpen(false);
+            }
+        }
+        function onKey(event: KeyboardEvent) {
+            if (event.key === "Escape") {
+                setOpen(false);
+            }
+        }
+        document.addEventListener("pointerdown", onDown);
+        document.addEventListener("keydown", onKey);
+        return () => {
+            document.removeEventListener("pointerdown", onDown);
+            document.removeEventListener("keydown", onKey);
+        };
+    }, [open]);
+
+    function act(run: () => void) {
+        run();
+        close();
+    }
+
     const status = free
-        ? "On the table"
+        ? "free"
         : mine
-          ? "In your hand"
-          : `Held by ${who}`;
+          ? "yours"
+          : pending
+            ? `asking ${holder?.name ?? "someone"}`
+            : (holder?.name ?? "someone");
 
     return (
-        <article
-            className={`pen-card pen-${slot === 0 ? "one" : "two"}${mine ? " pen-mine" : ""}${free ? " pen-free" : ""}`}
+        <div
+            className={`pen${mine ? " pen-mine" : ""}${free ? " pen-free" : ""}${asked ? " pen-asked" : ""}`}
+            onPointerEnter={(event) => {
+                if (event.pointerType !== "mouse" || asked) {
+                    return;
+                }
+                clearTimers();
+                openTimer.current = window.setTimeout(() => setOpen(true), 150);
+            }}
+            onPointerLeave={(event) => {
+                if (event.pointerType !== "mouse") {
+                    return;
+                }
+                clearTimers();
+                closeTimer.current = window.setTimeout(() => setOpen(false), 220);
+            }}
+            ref={wrap}
         >
-            <div className="pen-card-head">
-                <span className="pen-stick" aria-hidden="true">
-                    <Icon />
+            <button
+                aria-expanded={open}
+                aria-haspopup="menu"
+                aria-label={`${label}, ${status}`}
+                className="pen-chip"
+                onClick={() => {
+                    setOpen((value) => (touched.current ? !value : true));
+                }}
+                onPointerDown={(event) => {
+                    touched.current = event.pointerType !== "mouse";
+                }}
+                type="button"
+            >
+                <span className="pen-ink">
+                    <InkStroke ink={MARKER_INK[slot]} />
                 </span>
-                <div>
-                    <p className="pen-label">{label}</p>
-                    <p className="pen-status">{asked ? `Asked ${who}` : status}</p>
-                </div>
-            </div>
-            <div className="pen-verbs">
-                {free ? (
-                    <button className="pen-verb" onClick={() => onTake(slot)} type="button">
-                        Pick up
-                    </button>
+                <span className="pen-holder">
+                    {holder ? <Avatar index={holder.avatar} /> : <span className="pen-empty" />}
+                </span>
+                {pending ? (
+                    <span
+                        className="pen-fuse"
+                        style={{ ["--left" as string]: fuseLeft(pending.expiresAt, tick) }}
+                    />
                 ) : null}
-                {mine ? (
-                    <>
-                        <button className="pen-verb" onClick={() => onDrop(slot)} type="button">
-                            Put down
-                        </button>
-                        {others.length > 0 ? (
-                            <label className="pen-pass">
-                                <span className="sr-only">Pass {label} to</span>
-                                <select
-                                    defaultValue=""
-                                    onChange={(event) => {
-                                        const next = event.target.value;
-                                        event.target.value = "";
-                                        if (next) {
-                                            onGive(slot, next);
-                                        }
-                                    }}
-                                >
-                                    <option disabled value="">
-                                        Pass to
-                                    </option>
-                                    {others.map((seat) => (
-                                        <option key={seat.id} value={seat.id}>
-                                            {seat.name}
-                                        </option>
-                                    ))}
-                                </select>
-                            </label>
-                        ) : null}
-                    </>
-                ) : null}
-                {!free && !mine ? (
-                    <>
-                        <button
-                            className="pen-verb"
-                            disabled={asked}
-                            onClick={() => holderId && onAsk(holderId)}
-                            type="button"
+            </button>
+
+            {note ? <span className="pen-note">{note}</span> : null}
+
+            {asked ? (
+                <div className="pen-asks">
+                    {incoming.map((ask) => (
+                        <div
+                            aria-label={`${ask.fromName} wants the ${label}`}
+                            className="pen-ask"
+                            key={ask.requestId}
+                            role="alertdialog"
                         >
-                            {asked ? "Asked" : `Ask ${who}`}
-                        </button>
-                        {isHost ? (
-                            <button className="pen-verb" onClick={() => onHostTake(slot)} type="button">
-                                Take
+                            <span className="pen-ask-who">
+                                <Avatar index={ask.fromAvatar} />
+                                {ask.fromName}
+                            </span>
+                            <button
+                                className="btn btn-brass btn-tiny"
+                                onClick={() => onAnswer(ask.requestId, true)}
+                                type="button"
+                            >
+                                Pass
                             </button>
-                        ) : null}
-                    </>
-                ) : null}
-            </div>
-        </article>
+                            <button
+                                className="btn btn-ghost btn-tiny"
+                                onClick={() => onAnswer(ask.requestId, false)}
+                                type="button"
+                            >
+                                Keep
+                            </button>
+                            <span
+                                className="pen-ask-fuse"
+                                style={{ ["--left" as string]: fuseLeft(ask.expiresAt, tick) }}
+                            />
+                        </div>
+                    ))}
+                </div>
+            ) : null}
+
+            {open ? (
+                <div className="pen-menu" role="menu">
+                    <p className="pen-menu-head">{label}</p>
+
+                    {free ? (
+                        <button className="pen-item" onClick={() => act(() => onTake(slot))} role="menuitem" type="button">
+                            <GrabIcon />
+                            Pick it up
+                        </button>
+                    ) : null}
+
+                    {mine ? (
+                        <button className="pen-item" onClick={() => act(() => onDrop(slot))} role="menuitem" type="button">
+                            <PutDownIcon />
+                            Put it down
+                        </button>
+                    ) : null}
+
+                    {mine && others.length > 0 ? (
+                        <>
+                            <p className="pen-menu-kicker">Pass to</p>
+                            {others.map((seat) => (
+                                <button
+                                    className="pen-item"
+                                    key={seat.id}
+                                    onClick={() => act(() => onGive(slot, seat.id))}
+                                    role="menuitem"
+                                    type="button"
+                                >
+                                    <Avatar index={seat.avatar} />
+                                    {seat.name}
+                                </button>
+                            ))}
+                        </>
+                    ) : null}
+
+                    {!free && !mine ? (
+                        pending ? (
+                            <button className="pen-item" onClick={() => act(onCancelAsk)} role="menuitem" type="button">
+                                <CloseIcon />
+                                Cancel the ask
+                            </button>
+                        ) : (
+                            <button
+                                className="pen-item"
+                                onClick={() => act(() => onAsk(slot))}
+                                role="menuitem"
+                                type="button"
+                            >
+                                <AskIcon />
+                                Ask {holder?.name ?? "them"}
+                            </button>
+                        )
+                    ) : null}
+
+                    {showHost ? (
+                        <>
+                            <p className="pen-menu-kicker">Host</p>
+                            {!free ? (
+                                <button
+                                    className="pen-item pen-item-host"
+                                    onClick={() => act(() => onHostTake(slot))}
+                                    role="menuitem"
+                                    type="button"
+                                >
+                                    <GrabIcon />
+                                    Take it
+                                </button>
+                            ) : null}
+                            {hostGiveTo.map((seat) => (
+                                <button
+                                    className="pen-item pen-item-host"
+                                    key={seat.id}
+                                    onClick={() => act(() => onHostGive(slot, seat.id))}
+                                    role="menuitem"
+                                    type="button"
+                                >
+                                    <Avatar index={seat.avatar} />
+                                    Hand to {seat.name}
+                                </button>
+                            ))}
+                        </>
+                    ) : null}
+                </div>
+            ) : null}
+        </div>
     );
 }
 

@@ -128,7 +128,7 @@ app.post("/rooms", middleware, async (req, res) => {
 
     const parsed = CreateRoomSchema.safeParse(req.body);
     if (!parsed.success) {
-        return res.status(400).json({ message: "Invalid input" });
+        return res.status(400).json({ message: "Name this sitting" });
     }
 
     try {
@@ -151,7 +151,7 @@ app.post("/rooms", middleware, async (req, res) => {
                 hostParticipantId: req.participantId,
                 hostName: req.participantName ?? "",
                 accessMode: "knock",
-                name: parsed.data.name ?? null,
+                name: parsed.data.name,
                 expiresAt,
             },
         });

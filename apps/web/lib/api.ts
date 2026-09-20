@@ -76,11 +76,11 @@ export async function fetchOccupancy() {
     return response.data;
 }
 
-export async function createRoom(token: string, name?: string) {
+export async function createRoom(token: string, name: string) {
     try {
         const response = await axios.post<CreatedRoom>(
             `${BACKEND_URL}/rooms`,
-            name ? { name } : {},
+            { name },
             { headers: { Authorization: `Bearer ${token}` } }
         );
         return response.data;

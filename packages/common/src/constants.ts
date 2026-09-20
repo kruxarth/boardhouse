@@ -10,3 +10,14 @@ export const MAX_REPLAY_EVENTS = 480;
 export const MAX_REPLAY_BYTES = 4_000_000;
 /** Collapse burst strokes into one frame so the buffer spans the sitting. */
 export const MIN_REPLAY_CANVAS_GAP_MS = 2_000;
+/** How long a marker holder has to answer before the ask lapses. */
+export const ASK_WINDOW_MS = 9_000;
+/** A holder who has not drawn or moved in this long passes the marker on ask. */
+export const HOLDER_IDLE_MS = 45_000;
+/** Breathing room after a refused or lapsed ask before the same slot can be asked again. */
+export const ASK_COOLDOWN_MS = 8_000;
+export const REACTION_MIN_GAP_MS = 800;
+/** One per seat, handed out so no two people at a table share a face. */
+export const AVATAR_COUNT = MAX_SEATS;
+export const REACTIONS = ["👍", "🔥", "😂", "🎉", "👀", "❤️"] as const;
+export type Reaction = (typeof REACTIONS)[number];

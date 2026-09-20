@@ -1,23 +1,15 @@
-export function MarkerOneIcon() {
+/** A marker is identified by the mark it makes, not by a picture of a pen. */
+export function InkStroke({ ink }: { ink: string }) {
     return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
+        <svg aria-hidden="true" viewBox="0 0 30 16" className="ink-stroke">
             <path
-                d="M7.2 20.5 16.8 3.8c.3-.5 1-.7 1.5-.4l1.3.8c.5.3.7 1 .4 1.5L10.4 22.4c-.2.4-.6.6-1 .6H6.2c-.7 0-1.1-.8-.7-1.4l1.7-1.1Z"
-                fill="currentColor"
+                d="M3 11.2c3.3-6.1 6.2-7.6 8.8-4.7 2.5 2.8 5.2 3.6 8.2.6 1.9-1.9 3.6-2 5-.4"
+                fill="none"
+                stroke={ink}
+                strokeWidth="3"
+                strokeLinecap="round"
+                strokeLinejoin="round"
             />
-            <path d="M8.4 18.2 17 4.8" stroke="#000" strokeOpacity="0.28" strokeWidth="1.2" />
-        </svg>
-    );
-}
-
-export function MarkerTwoIcon() {
-    return (
-        <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
-            <path
-                d="M15.8 3.2h2.4c.6 0 1 .5 1 1v4.2c0 .3-.1.5-.3.7l-9.4 11.3c-.4.5-1.2.3-1.4-.3l-.8-2.5-2.4-.7c-.6-.2-.8-1 .3-1.4L15.5 4c.2-.2.4-.5.3-.8Z"
-                fill="currentColor"
-            />
-            <rect x="16.2" y="2.4" width="3.4" height="2.2" rx="0.4" fill="currentColor" />
         </svg>
     );
 }
@@ -170,6 +162,16 @@ export function PutDownIcon() {
         <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
             <path d="M7 4.8h10v7.4H7Z" fill="none" stroke="currentColor" strokeWidth="1.8" />
             <path d="M12 12.2v7M9 16.4l3 3 3-3" fill="none" stroke="currentColor" strokeWidth="1.8" />
+        </svg>
+    );
+}
+
+export function SmileIcon() {
+    return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
+            <circle cx="12" cy="12" r="8.4" fill="none" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M8.6 14.2a4.2 4.2 0 0 0 6.8 0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <path d="M9.4 9.6h.1M14.5 9.6h.1" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" />
         </svg>
     );
 }
