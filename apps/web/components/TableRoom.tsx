@@ -424,16 +424,21 @@ export function TableRoom({
             }
             if (type === "cursor") {
                 const id = String(message.participantId);
+                if (id === session?.participantId) {
+                    return;
+                }
+                const cursor: RemoteCursor = {
+                    id,
+                    name: String(message.name ?? ""),
+                    x: Number(message.x),
+                    y: Number(message.y),
+                    tool: message.tool === "pointer" ? "pointer" : "laser",
+                    button: message.button === "down" ? "down" : "up",
+                };
+                boardRef.current?.applyCursor(cursor);
                 setCursors((current) => {
                     const next = current.filter((item) => item.id !== id);
-                    next.push({
-                        id,
-                        name: String(message.name ?? ""),
-                        x: Number(message.x),
-                        y: Number(message.y),
-                        tool: message.tool === "pointer" ? "pointer" : "laser",
-                        button: message.button === "down" ? "down" : "up",
-                    });
+                    next.push(cursor);
                     return next.slice(-12);
                 });
                 return;

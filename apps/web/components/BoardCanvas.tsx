@@ -6,6 +6,7 @@ import {
     useCallback,
     useEffect,
     useImperativeHandle,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -102,6 +103,29 @@ function collaboratorColor(id: string) {
         : { background: "#1e1e1e", stroke: "#f386a1" };
 }
 
+function collaboratorsFromCursors(cursors: RemoteCursor[]) {
+    const collaborators = new Map();
+    for (const cursor of cursors) {
+        const tool: PointerTool =
+            cursor.tool ?? (cursor.drawing ? "pointer" : "laser");
+        const color = collaboratorColor(cursor.id);
+        collaborators.set(cursor.id, {
+            id: cursor.id,
+            username: cursor.name,
+            button: cursor.button ?? "up",
+            color,
+            pointer: {
+                x: cursor.x,
+                y: cursor.y,
+                tool,
+                renderCursor: true,
+                laserColor: color.background,
+            },
+        });
+    }
+    return collaborators;
+}
+
 function elementId(element: unknown) {
     if (!element || typeof element !== "object" || !("id" in element)) {
         return "";
@@ -139,6 +163,7 @@ function replacePlaybackElements(local: readonly unknown[], remote: unknown[]) {
 export type BoardHandle = {
     savePng: (filename: string) => Promise<void>;
     saveExcalidraw: (filename: string) => void;
+    applyCursor: (cursor: RemoteCursor) => void;
 };
 
 type BoardCanvasProps = {
@@ -172,10 +197,17 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
     const applyingRef = useRef(false);
     const pendingSceneRef = useRef<unknown>(null);
     const lastPointerButtonRef = useRef<PointerButton>("up");
+    const pointerDownRef = useRef(false);
+    const lastPointRef = useRef<{ x: number; y: number; tool: PointerTool }>({
+        x: 0,
+        y: 0,
+        tool: "laser",
+    });
     const applyTokenRef = useRef(0);
     const sceneGenRef = useRef(0);
     const hydratedRef = useRef(false);
     const lastSceneRef = useRef("");
+    const cursorsRef = useRef(cursors);
     const onSceneRef = useRef(onScene);
     const onCursorRef = useRef(onCursor);
     onSceneRef.current = onScene;
@@ -242,6 +274,10 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
             elements,
             captureUpdate: "NEVER",
         });
+        const collaborators = collaboratorsFromCursors(cursorsRef.current);
+        if (collaborators.size > 0) {
+            api.updateScene({ collaborators });
+        }
         lastSceneRef.current = serializeScene(elements, api.getFiles());
         window.setTimeout(() => {
             if (applyToken !== applyTokenRef.current) {
@@ -329,37 +365,17 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                 .join("|"),
         [cursors]
     );
-    const cursorsRef = useRef(cursors);
-    cursorsRef.current = cursors;
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        cursorsRef.current = cursors;
         const api = apiRef.current;
         if (!apiReady || !api) {
             return;
         }
-        const collaborators = new Map();
-        for (const cursor of cursorsRef.current) {
-            const tool: PointerTool =
-                cursor.tool ?? (cursor.drawing ? "pointer" : "laser");
-            collaborators.set(cursor.id, {
-                id: cursor.id,
-                username: cursor.name,
-                button: cursor.button ?? "up",
-                color: collaboratorColor(cursor.id),
-                pointer: {
-                    x: cursor.x,
-                    y: cursor.y,
-                    tool,
-                    renderCursor: true,
-                    laserColor: collaboratorColor(cursor.id).background,
-                },
-            });
-        }
         api.updateScene({
-            collaborators,
-            captureUpdate: "NEVER",
+            collaborators: collaboratorsFromCursors(cursors),
         });
-    }, [apiReady, cursorsKey]);
+    }, [apiReady, cursors, cursorsKey]);
 
     useEffect(() => {
         if (!apiReady) {
@@ -382,6 +398,14 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
     }, [apiReady, canDraw, allowLaser, markerSlot, syncTool, syncInk, finishApplying]);
 
     useImperativeHandle(ref, () => ({
+        applyCursor(cursor) {
+            const next = cursorsRef.current.filter((item) => item.id !== cursor.id);
+            next.push(cursor);
+            cursorsRef.current = next;
+            apiRef.current?.updateScene({
+                collaborators: collaboratorsFromCursors(next),
+            });
+        },
         async savePng(filename) {
             const api = apiRef.current;
             const exportToBlob = excalidrawLib.exportToBlob;
@@ -471,18 +495,52 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     }
                     sendThrottled(payload);
                 }}
+                onPointerDown={(
+                    activeTool: { type?: string },
+                    pointerDownState: { origin?: { x: number; y: number } }
+                ) => {
+                    const tool: PointerTool =
+                        activeTool.type === "laser" ? "laser" : "pointer";
+                    const x = pointerDownState.origin?.x ?? lastPointRef.current.x;
+                    const y = pointerDownState.origin?.y ?? lastPointRef.current.y;
+                    pointerDownRef.current = true;
+                    lastPointerButtonRef.current = "down";
+                    lastPointRef.current = { x, y, tool };
+                    pointerMoveThrottled.cancel();
+                    onCursorRef.current(x, y, tool, "down");
+                }}
+                onPointerUp={(
+                    activeTool: { type?: string },
+                    pointerDownState: { lastCoords?: { x: number; y: number } }
+                ) => {
+                    const tool: PointerTool =
+                        activeTool.type === "laser" ? "laser" : "pointer";
+                    const x = pointerDownState.lastCoords?.x ?? lastPointRef.current.x;
+                    const y = pointerDownState.lastCoords?.y ?? lastPointRef.current.y;
+                    pointerDownRef.current = false;
+                    lastPointerButtonRef.current = "up";
+                    lastPointRef.current = { x, y, tool };
+                    pointerMoveThrottled.cancel();
+                    onCursorRef.current(x, y, tool, "up");
+                }}
                 onPointerUpdate={(payload: { pointer?: Pointer; button?: PointerButton }) => {
                     if (!payload.pointer) {
                         return;
                     }
                     const tool: PointerTool =
                         payload.pointer.tool === "pointer" ? "pointer" : "laser";
-                    const button: PointerButton = payload.button === "down" ? "down" : "up";
+                    const button: PointerButton = pointerDownRef.current
+                        ? "down"
+                        : payload.button === "down"
+                          ? "down"
+                          : "up";
                     const x = payload.pointer.x;
                     const y = payload.pointer.y;
+                    lastPointRef.current = { x, y, tool };
                     const buttonChanged = lastPointerButtonRef.current !== button;
                     lastPointerButtonRef.current = button;
                     if (buttonChanged) {
+                        pointerMoveThrottled.cancel();
                         onCursorRef.current(x, y, tool, button);
                         return;
                     }

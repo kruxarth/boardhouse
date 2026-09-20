@@ -1,9 +1,13 @@
-export function throttle<T extends (...args: never[]) => void>(fn: T, ms: number): T {
+export type Throttled<T extends (...args: never[]) => void> = T & {
+    cancel: () => void;
+};
+
+export function throttle<T extends (...args: never[]) => void>(fn: T, ms: number): Throttled<T> {
     let last = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let lastArgs: Parameters<T>;
+    let lastArgs: Parameters<T> | undefined;
 
-    return ((...args: Parameters<T>) => {
+    const wrapped = ((...args: Parameters<T>) => {
         lastArgs = args;
         const now = Date.now();
         const remaining = ms - (now - last);
@@ -20,8 +24,19 @@ export function throttle<T extends (...args: never[]) => void>(fn: T, ms: number
             timer = setTimeout(() => {
                 last = Date.now();
                 timer = null;
-                fn(...lastArgs);
+                if (lastArgs) {
+                    fn(...lastArgs);
+                }
             }, remaining);
         }
-    }) as T;
+    }) as Throttled<T>;
+
+    wrapped.cancel = () => {
+        if (timer) {
+            clearTimeout(timer);
+            timer = null;
+        }
+    };
+
+    return wrapped;
 }

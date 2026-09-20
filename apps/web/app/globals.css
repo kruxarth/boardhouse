@@ -747,19 +747,25 @@ select:focus-visible,
 }
 
 .face {
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 1.45rem;
+  height: 1.45rem;
   display: block;
+  object-fit: cover;
 }
 
 .seat-face {
   display: grid;
   place-items: center;
-  width: 1.55rem;
-  height: 1.55rem;
+  width: 1.7rem;
+  height: 1.7rem;
   flex: none;
-  color: var(--color-pink);
-  background: color-mix(in srgb, var(--color-pink) 12%, #000);
+  overflow: hidden;
+  background: #0a0a0a;
+}
+
+.seat-face .face {
+  width: 100%;
+  height: 100%;
 }
 
 .seat-name {
@@ -972,7 +978,13 @@ select:focus-visible,
   width: 1.7rem;
   height: 1.7rem;
   flex: none;
-  color: var(--color-pink);
+  overflow: hidden;
+  background: #0a0a0a;
+}
+
+.pen-holder .face {
+  width: 100%;
+  height: 100%;
 }
 
 .pen-empty {
