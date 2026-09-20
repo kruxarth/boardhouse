@@ -42,6 +42,8 @@ export type LiveRoom = {
     name: string | null;
     expiresAt: number;
     startedAt: number;
+    /** When the last admitted person left. Null while someone is seated. */
+    emptySince: number | null;
     admitted: Map<string, Seat>;
     waiting: Map<string, Seat>;
     markers: [string | null, string | null];
@@ -76,6 +78,7 @@ export function createLiveRoom(row: {
     name: string | null;
     createdAt: Date;
     expiresAt: Date;
+    emptySince?: Date | null;
 }): LiveRoom {
     const room: LiveRoom = {
         id: row.id,
@@ -87,6 +90,7 @@ export function createLiveRoom(row: {
         name: row.name,
         expiresAt: row.expiresAt.getTime(),
         startedAt: row.createdAt.getTime(),
+        emptySince: row.emptySince ? row.emptySince.getTime() : Date.now(),
         admitted: new Map(),
         waiting: new Map(),
         markers: [row.hostParticipantId, null],
@@ -281,15 +285,28 @@ export function holderIsAway(room: LiveRoom, holderId: string) {
     return Date.now() - holder.activeAt >= HOLDER_IDLE_MS;
 }
 
-export function assignAvatar(room: LiveRoom, participantId: string) {
+function isAvatarIndex(value: unknown): value is number {
+    return Number.isInteger(value) && (value as number) >= 0 && (value as number) < AVATAR_COUNT;
+}
+
+function takenAvatars(room: LiveRoom, exceptId?: string) {
     const taken = new Set<number>();
     for (const seat of [...room.admitted.values(), ...room.waiting.values()]) {
-        if (seat.participantId !== participantId) {
+        if (seat.participantId !== exceptId && isAvatarIndex(seat.avatar)) {
             taken.add(seat.avatar);
         }
     }
+    return taken;
+}
+
+export function assignAvatar(room: LiveRoom, participantId: string) {
+    if (room.avatarOrder.length !== AVATAR_COUNT) {
+        room.avatarOrder = shuffled(AVATAR_COUNT);
+    }
+    const taken = takenAvatars(room, participantId);
     const remembered = room.avatars.get(participantId);
-    if (remembered !== undefined && !taken.has(remembered)) {
+    if (isAvatarIndex(remembered) && !taken.has(remembered)) {
+        room.avatars.set(participantId, remembered);
         return remembered;
     }
     for (const index of room.avatarOrder) {
@@ -298,7 +315,32 @@ export function assignAvatar(room: LiveRoom, participantId: string) {
             return index;
         }
     }
-    return room.avatarOrder[0] ?? 0;
+    for (let index = 0; index < AVATAR_COUNT; index += 1) {
+        if (!taken.has(index)) {
+            room.avatars.set(participantId, index);
+            return index;
+        }
+    }
+    return remembered ?? 0;
+}
+
+/** Repair seats that never got a face, or that collided on the same index. */
+export function ensureUniqueAvatars(room: LiveRoom) {
+    if (room.avatarOrder.length !== AVATAR_COUNT) {
+        room.avatarOrder = shuffled(AVATAR_COUNT);
+    }
+    const seats = [...room.admitted.values(), ...room.waiting.values()];
+    const used = new Set<number>();
+    for (const seat of seats) {
+        if (isAvatarIndex(seat.avatar) && !used.has(seat.avatar)) {
+            used.add(seat.avatar);
+            room.avatars.set(seat.participantId, seat.avatar);
+            continue;
+        }
+        room.avatars.delete(seat.participantId);
+        seat.avatar = assignAvatar(room, seat.participantId);
+        used.add(seat.avatar);
+    }
 }
 
 export function clearAsksForSlot(room: LiveRoom, slot: 0 | 1) {

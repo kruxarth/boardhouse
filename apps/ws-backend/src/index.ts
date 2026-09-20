@@ -21,6 +21,7 @@ import {
     appendReplay,
     asksHeldBy,
     assignAvatar,
+    ensureUniqueAvatars,
     clearAsksForSlot,
     cooldownLeft,
     createLiveRoom,
@@ -104,11 +105,12 @@ function presenceOf(seat: Seat) {
         id: seat.participantId,
         name: seat.name,
         muted: seat.muted,
-        avatar: seat.avatar,
+        avatar: Number.isInteger(seat.avatar) ? seat.avatar : 0,
     };
 }
 
 function roomState(room: LiveRoom, forHost: boolean, viaFormerSlug: boolean): RoomStatePayload {
+    ensureUniqueAvatars(room);
     return {
         type: "room_state",
         slug: room.slug,
@@ -280,6 +282,35 @@ async function wipeSitting(room: LiveRoom, message = "This sitting is over") {
     await deleteLivekitRooms(slugs);
 }
 
+async function persistEmptySince(room: LiveRoom) {
+    try {
+        await prismaClient.room.update({
+            where: { id: room.id },
+            data: { emptySince: room.emptySince === null ? null : new Date(room.emptySince) },
+        });
+    } catch {
+        // Room already wiped.
+    }
+}
+
+function markTableEmpty(room: LiveRoom) {
+    if (room.admitted.size > 0) {
+        return;
+    }
+    if (room.emptySince === null) {
+        room.emptySince = Date.now();
+        void persistEmptySince(room);
+    }
+}
+
+function markTableOccupied(room: LiveRoom) {
+    if (room.emptySince === null) {
+        return;
+    }
+    room.emptySince = null;
+    void persistEmptySince(room);
+}
+
 function detachSocket(room: LiveRoom, ws: WebSocket) {
     for (const [id, seat] of room.admitted) {
         if (seat.ws === ws) {
@@ -299,6 +330,7 @@ function detachSocket(room: LiveRoom, ws: WebSocket) {
             }
             refreshAsks(room);
             broadcastRoomState(room);
+            markTableEmpty(room);
             return;
         }
     }
@@ -383,9 +415,16 @@ async function loadRoom(slug: string) {
     }
 
     let live = getLiveRoom(row.id);
+    if (live && live.hostKey !== row.hostKey) {
+        closeSitting(live, "This table was claimed");
+        live = undefined;
+    }
     if (!live) {
         live = createLiveRoom(row);
         rememberLiveRoom(live);
+        if (!row.emptySince) {
+            void persistEmptySince(live);
+        }
     } else {
         live.slug = row.slug;
         live.formerSlugs = new Set(row.formerSlugs);
@@ -403,6 +442,7 @@ function admit(room: LiveRoom, connection: Connection) {
     room.waiting.delete(sessionOf(connection).participantId);
     const seat = makeSeat(room, connection, true);
     room.admitted.set(seat.participantId, seat);
+    markTableOccupied(room);
     connection.room = room;
     connection.viaFormerSlug = false;
 
@@ -1050,11 +1090,29 @@ httpServer.listen(port, "0.0.0.0", () => {
 });
 
 setInterval(() => {
-    for (const room of liveRooms.values()) {
-        if (isExpired(room)) {
-            closeSitting(room);
+    void (async () => {
+        for (const room of [...liveRooms.values()]) {
+            if (isExpired(room)) {
+                closeSitting(room);
+                continue;
+            }
+            try {
+                const row = await prismaClient.room.findUnique({
+                    where: { id: room.id },
+                    select: { hostKey: true },
+                });
+                if (!row) {
+                    closeSitting(room);
+                    continue;
+                }
+                if (row.hostKey !== room.hostKey) {
+                    closeSitting(room, "This table was claimed");
+                }
+            } catch {
+                // Next tick retries.
+            }
         }
-    }
+    })();
 }, 15_000);
 
 setInterval(() => {

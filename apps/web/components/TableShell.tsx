@@ -329,7 +329,7 @@ export function TableShell({
                                 {table.waiters.map((waiter) => (
                                     <li key={waiter.id}>
                                         <span className="knock-who">
-                                            <Avatar index={waiter.avatar} />
+                                            <Avatar id={waiter.id} index={waiter.avatar} />
                                             {waiter.name}
                                         </span>
                                         <button className="btn btn-brass" onClick={() => onAdmit(waiter.id)} type="button">
@@ -474,7 +474,7 @@ function SeatChip({
     return (
         <li className={isMe ? "seat seat-me" : "seat"}>
             <span className="seat-face">
-                <Avatar index={seat.avatar} />
+                <Avatar id={seat.id} index={seat.avatar} />
             </span>
             <span className="seat-name">
                 {seat.name}
@@ -725,7 +725,7 @@ function Pen({
                     <InkStroke ink={MARKER_INK[slot]} />
                 </span>
                 <span className="pen-holder">
-                    {holder ? <Avatar index={holder.avatar} /> : <span className="pen-empty" />}
+                    {holder ? <Avatar id={holder.id} index={holder.avatar} /> : <span className="pen-empty" />}
                 </span>
                 {pending ? (
                     <span
@@ -747,7 +747,7 @@ function Pen({
                             role="alertdialog"
                         >
                             <span className="pen-ask-who">
-                                <Avatar index={ask.fromAvatar} />
+                                <Avatar id={ask.fromParticipantId} index={ask.fromAvatar} />
                                 {ask.fromName}
                             </span>
                             <button
@@ -802,7 +802,7 @@ function Pen({
                                     role="menuitem"
                                     type="button"
                                 >
-                                    <Avatar index={seat.avatar} />
+                                    <Avatar id={seat.id} index={seat.avatar} />
                                     {seat.name}
                                 </button>
                             ))}
@@ -850,7 +850,7 @@ function Pen({
                                     role="menuitem"
                                     type="button"
                                 >
-                                    <Avatar index={seat.avatar} />
+                                    <Avatar id={seat.id} index={seat.avatar} />
                                     Hand to {seat.name}
                                 </button>
                             ))}

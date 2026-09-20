@@ -106,24 +106,119 @@ function collaboratorColor(id: string) {
 function collaboratorsFromCursors(cursors: RemoteCursor[]) {
     const collaborators = new Map();
     for (const cursor of cursors) {
-        const tool: PointerTool =
-            cursor.tool ?? (cursor.drawing ? "pointer" : "laser");
+        const tool: PointerTool = cursor.tool === "pointer" ? "pointer" : "laser";
+        const button: PointerButton = cursor.button === "down" ? "down" : "up";
         const color = collaboratorColor(cursor.id);
         collaborators.set(cursor.id, {
             id: cursor.id,
+            socketId: cursor.id,
             username: cursor.name,
-            button: cursor.button ?? "up",
+            button,
+            userState: "active",
             color,
             pointer: {
                 x: cursor.x,
                 y: cursor.y,
                 tool,
-                renderCursor: true,
+                renderCursor: false,
                 laserColor: color.background,
             },
         });
     }
     return collaborators;
+}
+
+function paintCollaborators(api: ExcalidrawApi | null, cursors: RemoteCursor[]) {
+    if (!api) {
+        return;
+    }
+    api.updateScene({
+        collaborators: collaboratorsFromCursors(cursors),
+    });
+}
+
+function sceneToFrame(
+    sceneX: number,
+    sceneY: number,
+    api: ExcalidrawApi,
+    frame: HTMLElement
+) {
+    const appState = api.getAppState() as {
+        scrollX?: number;
+        scrollY?: number;
+        zoom?: number | { value?: number };
+        offsetLeft?: number;
+        offsetTop?: number;
+    };
+    const zoom =
+        typeof appState.zoom === "number" ? appState.zoom : (appState.zoom?.value ?? 1);
+    const clientX = (sceneX + (appState.scrollX ?? 0)) * zoom + (appState.offsetLeft ?? 0);
+    const clientY = (sceneY + (appState.scrollY ?? 0)) * zoom + (appState.offsetTop ?? 0);
+    const rect = frame.getBoundingClientRect();
+    return { x: clientX - rect.left, y: clientY - rect.top };
+}
+
+function RemotePointers({
+    cursors,
+    trails,
+    api,
+    frame,
+    tick: _tick,
+}: {
+    cursors: RemoteCursor[];
+    trails: Map<string, { points: { x: number; y: number }[] }>;
+    api: ExcalidrawApi | null;
+    frame: HTMLDivElement | null;
+    tick: number;
+}) {
+    if (!api || !frame || (cursors.length === 0 && trails.size === 0)) {
+        return null;
+    }
+    const paths = [];
+    for (const [id, trail] of trails) {
+        if (trail.points.length < 2) {
+            continue;
+        }
+        const color = collaboratorColor(id).background;
+        const d = trail.points
+            .map((point, index) => {
+                const { x, y } = sceneToFrame(point.x, point.y, api, frame);
+                return `${index === 0 ? "M" : "L"}${x.toFixed(1)} ${y.toFixed(1)}`;
+            })
+            .join(" ");
+        paths.push(
+            <path
+                key={id}
+                d={d}
+                fill="none"
+                stroke={color}
+                strokeWidth="3.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                opacity="0.92"
+            />
+        );
+    }
+    return (
+        <div className="remote-pointers" aria-hidden>
+            <svg>{paths}</svg>
+            {cursors.map((cursor) => {
+                const { x, y } = sceneToFrame(cursor.x, cursor.y, api, frame);
+                const color = collaboratorColor(cursor.id).background;
+                const burning = cursor.tool !== "pointer" && cursor.button === "down";
+                return (
+                    <div
+                        key={cursor.id}
+                        className={burning ? "remote-pointer remote-pointer-laser" : "remote-pointer"}
+                        style={{ left: x, top: y, color }}
+                    >
+                        <span className="remote-pointer-dot" />
+                        <span className="remote-pointer-name">{cursor.name}</span>
+                    </div>
+                );
+            })}
+        </div>
+    );
 }
 
 function elementId(element: unknown) {
@@ -164,6 +259,7 @@ export type BoardHandle = {
     savePng: (filename: string) => Promise<void>;
     saveExcalidraw: (filename: string) => void;
     applyCursor: (cursor: RemoteCursor) => void;
+    dropCursor: (id: string) => void;
 };
 
 type BoardCanvasProps = {
@@ -208,10 +304,74 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
     const hydratedRef = useRef(false);
     const lastSceneRef = useRef("");
     const cursorsRef = useRef(cursors);
+    const canDrawRef = useRef(canDraw);
     const onSceneRef = useRef(onScene);
     const onCursorRef = useRef(onCursor);
+    const frameRef = useRef<HTMLDivElement | null>(null);
+    const trailsRef = useRef<Map<string, { points: { x: number; y: number }[] }>>(new Map());
+    const fadeTimersRef = useRef<Map<string, number>>(new Map());
+    const [overlayTick, setOverlayTick] = useState(0);
     onSceneRef.current = onScene;
     onCursorRef.current = onCursor;
+    canDrawRef.current = canDraw;
+
+    const bumpOverlay = useMemo(
+        () =>
+            throttle(() => {
+                setOverlayTick((tick) => tick + 1);
+            }, 32),
+        []
+    );
+
+    const rememberTrail = useCallback(
+        (cursor: RemoteCursor) => {
+            const fade = fadeTimersRef.current.get(cursor.id);
+            if (cursor.tool !== "pointer" && cursor.button === "down") {
+                if (fade != null) {
+                    window.clearTimeout(fade);
+                    fadeTimersRef.current.delete(cursor.id);
+                }
+                let trail = trailsRef.current.get(cursor.id);
+                if (!trail) {
+                    trail = { points: [] };
+                    trailsRef.current.set(cursor.id, trail);
+                }
+                const last = trail.points.at(-1);
+                if (!last || last.x !== cursor.x || last.y !== cursor.y) {
+                    trail.points.push({ x: cursor.x, y: cursor.y });
+                    if (trail.points.length > 80) {
+                        trail.points.splice(0, trail.points.length - 80);
+                    }
+                }
+                return;
+            }
+            if (fade != null) {
+                return;
+            }
+            fadeTimersRef.current.set(
+                cursor.id,
+                window.setTimeout(() => {
+                    fadeTimersRef.current.delete(cursor.id);
+                    trailsRef.current.delete(cursor.id);
+                    bumpOverlay();
+                }, 700)
+            );
+        },
+        [bumpOverlay]
+    );
+
+    const forgetTrail = useCallback(
+        (id: string) => {
+            const fade = fadeTimersRef.current.get(id);
+            if (fade != null) {
+                window.clearTimeout(fade);
+                fadeTimersRef.current.delete(id);
+            }
+            trailsRef.current.delete(id);
+            bumpOverlay();
+        },
+        [bumpOverlay]
+    );
 
     const sendThrottled = useMemo(
         () =>
@@ -274,10 +434,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
             elements,
             captureUpdate: "NEVER",
         });
-        const collaborators = collaboratorsFromCursors(cursorsRef.current);
-        if (collaborators.size > 0) {
-            api.updateScene({ collaborators });
-        }
+        paintCollaborators(api, cursorsRef.current);
         lastSceneRef.current = serializeScene(elements, api.getFiles());
         window.setTimeout(() => {
             if (applyToken !== applyTokenRef.current) {
@@ -317,8 +474,13 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
         unmountedRef.current = false;
         return () => {
             unmountedRef.current = true;
+            for (const fade of fadeTimersRef.current.values()) {
+                window.clearTimeout(fade);
+            }
+            fadeTimersRef.current.clear();
+            pointerMoveThrottled.cancel();
         };
-    }, []);
+    }, [pointerMoveThrottled]);
 
     const applyWhenReady = useCallback(
         (payload: unknown, replace = false) => {
@@ -372,10 +534,18 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
         if (!apiReady || !api) {
             return;
         }
-        api.updateScene({
-            collaborators: collaboratorsFromCursors(cursors),
-        });
-    }, [apiReady, cursors, cursorsKey]);
+        paintCollaborators(api, cursors);
+        for (const cursor of cursors) {
+            rememberTrail(cursor);
+        }
+        const living = new Set(cursors.map((cursor) => cursor.id));
+        for (const id of [...trailsRef.current.keys()]) {
+            if (!living.has(id)) {
+                forgetTrail(id);
+            }
+        }
+        bumpOverlay();
+    }, [apiReady, cursors, cursorsKey, bumpOverlay, forgetTrail, rememberTrail]);
 
     useEffect(() => {
         if (!apiReady) {
@@ -402,9 +572,27 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
             const next = cursorsRef.current.filter((item) => item.id !== cursor.id);
             next.push(cursor);
             cursorsRef.current = next;
-            apiRef.current?.updateScene({
-                collaborators: collaboratorsFromCursors(next),
-            });
+            paintCollaborators(apiRef.current, next);
+            rememberTrail(cursor);
+            bumpOverlay();
+        },
+        dropCursor(id) {
+            const current = cursorsRef.current;
+            const existing = current.find((item) => item.id === id);
+            if (!existing) {
+                forgetTrail(id);
+                return;
+            }
+            const remaining = current.filter((item) => item.id !== id);
+            cursorsRef.current = remaining;
+            forgetTrail(id);
+            paintCollaborators(apiRef.current, [...remaining, { ...existing, button: "up" }]);
+            window.setTimeout(() => {
+                if (cursorsRef.current.some((item) => item.id === id)) {
+                    return;
+                }
+                paintCollaborators(apiRef.current, cursorsRef.current);
+            }, 50);
         },
         async savePng(filename) {
             const api = apiRef.current;
@@ -448,7 +636,10 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
     }));
 
     return (
-        <div className="board-frame">
+        <div
+            ref={frameRef}
+            className={canDraw || playback ? "board-frame" : "board-frame board-watch"}
+        >
             <Excalidraw
                 name="board-house"
                 excalidrawAPI={(api) => {
@@ -456,7 +647,8 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     setApiReady(true);
                 }}
                 isCollaborating={!playback}
-                viewModeEnabled={!canDraw}
+                viewModeEnabled={playback}
+                onScrollChange={() => bumpOverlay()}
                 aiEnabled={false}
                 initialData={{
                     appState: {
@@ -479,8 +671,16 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     },
                     welcomeScreen: false,
                 }}
-                onChange={(elements: unknown, _appState: unknown, files: unknown) => {
-                    if (!canDraw || !hydratedRef.current) {
+                onChange={(elements: unknown, appState: unknown, files: unknown) => {
+                    if (!canDraw) {
+                        const tool = (appState as { activeTool?: { type?: string } })?.activeTool
+                            ?.type;
+                        if (tool && tool !== "laser" && tool !== "hand") {
+                            syncTool(false, allowLaser);
+                        }
+                        return;
+                    }
+                    if (!hydratedRef.current) {
                         return;
                     }
                     const payload = scenePayload(elements, files);
@@ -499,8 +699,11 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     activeTool: { type?: string },
                     pointerDownState: { origin?: { x: number; y: number } }
                 ) => {
+                    if (!canDrawRef.current) {
+                        syncTool(false, allowLaser);
+                    }
                     const tool: PointerTool =
-                        activeTool.type === "laser" ? "laser" : "pointer";
+                        !canDrawRef.current || activeTool.type === "laser" ? "laser" : "pointer";
                     const x = pointerDownState.origin?.x ?? lastPointRef.current.x;
                     const y = pointerDownState.origin?.y ?? lastPointRef.current.y;
                     pointerDownRef.current = true;
@@ -514,7 +717,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     pointerDownState: { lastCoords?: { x: number; y: number } }
                 ) => {
                     const tool: PointerTool =
-                        activeTool.type === "laser" ? "laser" : "pointer";
+                        !canDrawRef.current || activeTool.type === "laser" ? "laser" : "pointer";
                     const x = pointerDownState.lastCoords?.x ?? lastPointRef.current.x;
                     const y = pointerDownState.lastCoords?.y ?? lastPointRef.current.y;
                     pointerDownRef.current = false;
@@ -528,7 +731,9 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                         return;
                     }
                     const tool: PointerTool =
-                        payload.pointer.tool === "pointer" ? "pointer" : "laser";
+                        !canDrawRef.current || payload.pointer.tool === "laser"
+                            ? "laser"
+                            : "pointer";
                     const button: PointerButton = pointerDownRef.current
                         ? "down"
                         : payload.button === "down"
@@ -546,6 +751,13 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     }
                     pointerMoveThrottled(x, y, tool, button);
                 }}
+            />
+            <RemotePointers
+                cursors={cursorsRef.current}
+                trails={trailsRef.current}
+                api={apiReady ? apiRef.current : null}
+                frame={frameRef.current}
+                tick={overlayTick}
             />
         </div>
     );

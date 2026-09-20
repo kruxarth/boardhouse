@@ -11,6 +11,7 @@ import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import type { BoardHandle, RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
+import { avatarFromId, withUniqueAvatars } from "./Avatars";
 import type { RecapEvent } from "./SittingRecap";
 import {
     doorCopy,
@@ -36,14 +37,17 @@ type DoorKind =
     | "joined";
 
 function asTable(state: RoomStatePayload): TableModel {
+    const taken = new Set<number>();
+    const seats = withUniqueAvatars(state.seats ?? [], taken);
+    const waiters = withUniqueAvatars(state.waiters ?? [], taken);
     return {
         slug: state.slug,
         name: state.name,
         accessMode: state.accessMode,
         expiresAt: state.expiresAt,
         hostParticipantId: state.hostParticipantId,
-        seats: state.seats,
-        waiters: state.waiters,
+        seats,
+        waiters,
         markers: state.markers,
         viaFormerSlug: state.viaFormerSlug,
         usedSeats: state.usedSeats,
@@ -100,6 +104,10 @@ export function TableRoom({
         }
         return table.markers[0] === session.participantId || table.markers[1] === session.participantId;
     }, [session, table]);
+    const remoteCursors = useMemo(
+        () => cursors.filter((cursor) => cursor.id !== session?.participantId),
+        [cursors, session?.participantId]
+    );
 
     useEffect(() => {
         if (hostKeyFromUrl) {
@@ -318,9 +326,32 @@ export function TableRoom({
                 setDoor("missing");
                 return;
             }
+            if (type === "participant_left") {
+                const id = String(message.participantId ?? "");
+                if (id) {
+                    boardRef.current?.dropCursor(id);
+                    setCursors((current) => current.filter((item) => item.id !== id));
+                }
+                return;
+            }
             if (type === "room_state") {
                 const state = message as unknown as RoomStatePayload;
                 setTable(asTable(state));
+                const living = new Set([
+                    ...(state.seats ?? []).map((seat) => seat.id),
+                    ...(state.waiters ?? []).map((waiter) => waiter.id),
+                ]);
+                setCursors((current) => {
+                    const next = current.filter((cursor) => living.has(cursor.id));
+                    if (next.length !== current.length) {
+                        for (const cursor of current) {
+                            if (!living.has(cursor.id)) {
+                                boardRef.current?.dropCursor(cursor.id);
+                            }
+                        }
+                    }
+                    return next;
+                });
                 if (state.viaFormerSlug === false && state.slug !== slug) {
                     const next = hostKey
                         ? `/room/${state.slug}?host=${hostKey}`
@@ -363,7 +394,9 @@ export function TableRoom({
                                 requestId: String(row.requestId ?? ""),
                                 fromParticipantId: String(row.fromParticipantId ?? ""),
                                 fromName: String(row.fromName ?? "Someone"),
-                                fromAvatar: Number(row.fromAvatar) || 0,
+                                fromAvatar: Number.isFinite(Number(row.fromAvatar))
+                                    ? Number(row.fromAvatar)
+                                    : avatarFromId(String(row.fromParticipantId ?? "")),
                                 slot: row.slot === 1 ? 1 : 0,
                                 expiresAt: String(row.expiresAt ?? ""),
                             };
@@ -620,7 +653,7 @@ export function TableRoom({
                 canDraw={canDraw}
                 snapshot={snapshot}
                 remoteScene={remoteScene}
-                cursors={cursors.filter((cursor) => cursor.id !== session.participantId)}
+                cursors={remoteCursors}
                 asks={asks}
                 pendingAsk={pendingAsk}
                 askResult={askResult}

@@ -6,7 +6,7 @@ import { ClaimTable } from "../components/ClaimTable";
 import { RoofArt, SkyArt } from "../components/HouseArt";
 import { HouseWindow } from "../components/HouseWindow";
 import { useLocalSession } from "../hooks/useLocalSession";
-import { createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
+import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
 
 export default function Home() {
@@ -18,6 +18,7 @@ export default function Home() {
     const [error, setError] = useState("");
     const [pending, setPending] = useState(false);
     const [claiming, setClaiming] = useState(false);
+    const [claimingSlug, setClaimingSlug] = useState<string | null>(null);
 
     useEffect(() => {
         let cancelled = false;
@@ -43,8 +44,9 @@ export default function Home() {
         };
     }, []);
 
-    const houseFull = occupancy !== null && occupancy.used >= occupancy.max;
     const tables = occupancy?.tables ?? null;
+    const unusedOpen = tables?.some((table) => !table.empty && table.unused) ?? false;
+    const houseFull = occupancy !== null && occupancy.used >= occupancy.max && !unusedOpen;
 
     async function openTable(payload: { name?: string; tableName: string }) {
         const sittingName = payload.tableName.trim();
@@ -59,7 +61,9 @@ export default function Home() {
         try {
             const nextSession = await sessionForSitting(readSession(), payload.name);
             setSession(nextSession);
-            const room = await createRoom(nextSession.token, sittingName);
+            const room = claimingSlug
+                ? await claimRoom(nextSession.token, claimingSlug, sittingName)
+                : await createRoom(nextSession.token, sittingName);
             rememberHostKey(room.slug, room.hostKey);
             router.push(room.hostPath);
         } catch (err) {
@@ -71,8 +75,9 @@ export default function Home() {
             } else {
                 setError(message);
                 setClaiming(false);
+                setClaimingSlug(null);
             }
-            if (message === "House is full") {
+            if (message === "House is full" || message === "That table is no longer unused") {
                 const next = await fetchOccupancy().catch(() => occupancy);
                 if (next) {
                     setOccupancy(next);
@@ -83,14 +88,26 @@ export default function Home() {
         }
     }
 
-    function onEmptyTable() {
-        if (houseFull || pending) {
+    function beginClaim(slug?: string) {
+        if (pending) {
+            return;
+        }
+        if (!slug && houseFull) {
             return;
         }
         if (!readSession() && session) {
             setSession(null);
         }
+        setClaimingSlug(slug ?? null);
         setClaiming(true);
+    }
+
+    function onEmptyTable() {
+        beginClaim();
+    }
+
+    function onUnusedTable(slug: string) {
+        beginClaim(slug);
     }
 
     function openLink(event: React.FormEvent) {
@@ -130,6 +147,7 @@ export default function Home() {
                                       table={table}
                                       disabled={pending || !ready}
                                       onEmpty={onEmptyTable}
+                                      onUnused={onUnusedTable}
                                       onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
                                   />
                               </li>
@@ -175,6 +193,7 @@ export default function Home() {
                                                       table={table}
                                                       disabled={pending || !ready}
                                                       onEmpty={onEmptyTable}
+                                                      onUnused={onUnusedTable}
                                                       onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
                                                   />
                                               </li>
@@ -194,11 +213,15 @@ export default function Home() {
                                             <ClaimTable
                                                 needName={!session}
                                                 pending={pending}
+                                                unused={Boolean(claimingSlug)}
                                                 onSubmit={(payload) => void openTable(payload)}
                                             />
                                             <button
                                                 className="btn btn-ghost"
-                                                onClick={() => setClaiming(false)}
+                                                onClick={() => {
+                                                    setClaiming(false);
+                                                    setClaimingSlug(null);
+                                                }}
                                                 type="button"
                                             >
                                                 Cancel
@@ -223,9 +246,11 @@ export default function Home() {
                                             </form>
                                             {ready && !houseFull ? (
                                                 <p className="frontdoor-hint">
-                                                    {session
-                                                        ? "Pick a dark window and name the table."
-                                                        : "No key? Pick a dark window and sit down."}
+                                                    {unusedOpen
+                                                        ? "A quiet window can be claimed and renamed."
+                                                        : session
+                                                          ? "Pick a dark window and name the table."
+                                                          : "No key? Pick a dark window and sit down."}
                                                 </p>
                                             ) : null}
                                         </>
@@ -250,7 +275,11 @@ export default function Home() {
                     <li>Ten seats at a table. No spectators.</li>
                     <li>Two markers move. Everyone else points.</li>
                     <li>Mics work like a call. The host can mute you; only you unmute yourself.</li>
-                    <li>Every table is wiped at twenty-four hours. Save the board if you want it.</li>
+                    <li>
+                        Every table is wiped at twenty-four hours. After ten minutes with nobody
+                        seated, anyone can claim the unused window and rename it. Save the board if
+                        you want it.
+                    </li>
                 </ul>
             </footer>
         </div>

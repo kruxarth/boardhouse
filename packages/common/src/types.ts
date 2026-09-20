@@ -12,6 +12,8 @@ export const CreateRoomSchema = z.object({
     name: z.string().trim().min(1).max(40),
 });
 
+export const ClaimRoomSchema = CreateRoomSchema;
+
 export const MarkerSlotSchema = z.union([z.literal(0), z.literal(1)]);
 export type MarkerSlot = z.infer<typeof MarkerSlotSchema>;
 

@@ -21,6 +21,9 @@ model Room {
   formerSlugs         String[] @default([])
   createdAt           DateTime @default(now())
   expiresAt           DateTime
+  /** Null while someone is seated. Set when the last person leaves, or on create. After EMPTY_TABLE_MS the house offers the table for claim. */
+  emptySince          DateTime?
 
   @@index([expiresAt])
+  @@index([emptySince])
 }

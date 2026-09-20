@@ -10,7 +10,14 @@ export type Occupancy = {
 
 export type HouseTable =
     | { empty: true }
-    | { empty: false; slug: string; name: string | null; hostName: string; expiresAt: string };
+    | {
+          empty: false;
+          unused: boolean;
+          slug: string;
+          name: string | null;
+          hostName: string;
+          expiresAt: string;
+      };
 
 export type CreatedRoom = {
     slug: string;
@@ -96,6 +103,37 @@ export async function createRoom(token: string, name: string) {
             throw err;
         }
         throw new Error("Could not open a table");
+    }
+}
+
+export async function claimRoom(token: string, slug: string, name: string) {
+    try {
+        const response = await axios.post<CreatedRoom>(
+            `${BACKEND_URL}/rooms/${encodeURIComponent(slug)}/claim`,
+            { name },
+            { headers: { Authorization: `Bearer ${token}` } }
+        );
+        return response.data;
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 401) {
+            clearSession();
+            throw new Error("Name required");
+        }
+        if (axios.isAxiosError(error) && error.response?.status === 409) {
+            const occupancy = error.response.data?.occupancy as Occupancy | undefined;
+            const err = new Error("That table is no longer unused") as Error & {
+                occupancy?: Occupancy;
+            };
+            err.occupancy = occupancy;
+            throw err;
+        }
+        if (axios.isAxiosError(error) && error.response?.status === 410) {
+            throw new Error("This sitting is over");
+        }
+        if (axios.isAxiosError(error) && error.response?.status === 404) {
+            throw new Error("No table at this door");
+        }
+        throw new Error("Could not claim this table");
     }
 }
 

@@ -4,13 +4,15 @@ import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import { JWT_SECRET } from "@repo/backend-common/config";
 import { MAX_ROOMS, SESSION_TTL_SECONDS } from "@repo/common/constants";
-import { CreateRoomSchema, CreateSessionSchema } from "@repo/common/types";
+import { ClaimRoomSchema, CreateRoomSchema, CreateSessionSchema } from "@repo/common/types";
 import { prismaClient } from "@repo/db";
 import { middleware } from "./middleware";
 import { livekitConfigured, mintLivekitToken } from "./livekit";
 import {
     assertHouseHasATable,
+    claimUnusedRoom,
     findRoomBySlug,
+    houseOccupancy,
     listHouseTables,
     makeGuestSlug,
     makeHostKey,
@@ -101,20 +103,7 @@ app.post("/session/refresh", middleware, (req, res) => {
 app.get("/occupancy", async (_req, res) => {
     try {
         const rooms = await listHouseTables();
-        const occupied = rooms.map((room) => ({
-            empty: false as const,
-            slug: room.slug,
-            name: room.name,
-            hostName: room.hostName.trim() || "Someone",
-            expiresAt: room.expiresAt.toISOString(),
-        }));
-        const tables = [
-            ...occupied,
-            ...Array.from({ length: Math.max(0, MAX_ROOMS - occupied.length) }, () => ({
-                empty: true as const,
-            })),
-        ];
-        return res.json({ used: occupied.length, max: MAX_ROOMS, tables });
+        return res.json(houseOccupancy(rooms));
     } catch (error) {
         console.error("Error reading occupancy:", error);
         return res.status(500).json({ message: "Could not read occupancy" });
@@ -153,6 +142,7 @@ app.post("/rooms", middleware, async (req, res) => {
                 accessMode: "knock",
                 name: parsed.data.name,
                 expiresAt,
+                emptySince: new Date(),
             },
         });
 
@@ -169,6 +159,60 @@ app.post("/rooms", middleware, async (req, res) => {
     } catch (error) {
         console.error("Error creating room:", error);
         return res.status(500).json({ message: "Could not open a table" });
+    }
+});
+
+app.post("/rooms/:slug/claim", middleware, async (req, res) => {
+    if (!req.participantId) {
+        return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const slug = req.params.slug;
+    if (!slug) {
+        return res.status(400).json({ message: "Missing slug" });
+    }
+
+    const parsed = ClaimRoomSchema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ message: "Name this sitting" });
+    }
+
+    try {
+        const claimed = await claimUnusedRoom({
+            slug,
+            participantId: req.participantId,
+            hostName: req.participantName ?? "",
+            name: parsed.data.name,
+        });
+
+        if (!claimed.ok) {
+            if (claimed.reason === "missing") {
+                return res.status(404).json({ message: "No table at this door" });
+            }
+            if (claimed.reason === "expired") {
+                return res.status(410).json({ message: "This sitting is over" });
+            }
+            const rooms = await listHouseTables();
+            return res.status(409).json({
+                message: "That table is no longer unused",
+                occupancy: houseOccupancy(rooms),
+            });
+        }
+
+        const rooms = await listHouseTables();
+        return res.json({
+            slug: claimed.slug,
+            hostKey: claimed.hostKey,
+            name: claimed.name,
+            accessMode: claimed.accessMode,
+            expiresAt: claimed.expiresAt.toISOString(),
+            guestPath: `/room/${claimed.slug}`,
+            hostPath: `/room/${claimed.slug}?host=${claimed.hostKey}`,
+            occupancy: houseOccupancy(rooms),
+        });
+    } catch (error) {
+        console.error("Error claiming room:", error);
+        return res.status(500).json({ message: "Could not claim this table" });
     }
 });
 

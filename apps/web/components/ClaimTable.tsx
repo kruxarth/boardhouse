@@ -5,10 +5,12 @@ import { useState } from "react";
 export function ClaimTable({
     needName,
     pending,
+    unused,
     onSubmit,
 }: {
     needName: boolean;
     pending?: boolean;
+    unused?: boolean;
     onSubmit: (payload: { name?: string; tableName: string }) => void;
 }) {
     const [name, setName] = useState("");
@@ -30,7 +32,11 @@ export function ClaimTable({
                 onSubmit(needName ? { name: person, tableName: sitting } : { tableName: sitting });
             }}
         >
-            <p className="door-kicker">What should we call this table?</p>
+            <p className="door-kicker">
+                {unused
+                    ? "This table went quiet. Name it and it is yours."
+                    : "What should we call this table?"}
+            </p>
             <input
                 autoFocus
                 className="field"
@@ -56,7 +62,7 @@ export function ClaimTable({
                 </>
             ) : null}
             <button className="btn btn-brass" disabled={pending} type="submit">
-                Sit down
+                {unused ? "Claim this table" : "Sit down"}
             </button>
         </form>
     );
