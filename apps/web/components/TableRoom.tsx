@@ -11,7 +11,7 @@ import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import type { RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
-import { doorCopy, TableShell, type TableModel } from "./TableShell";
+import { doorCopy, TableShell, type MarkerAsk, type TableModel } from "./TableShell";
 
 type DoorKind =
     | "need-name"
@@ -57,12 +57,8 @@ export function TableRoom({
     const [snapshot, setSnapshot] = useState<unknown>(null);
     const [remoteScene, setRemoteScene] = useState<unknown>(null);
     const [cursors, setCursors] = useState<RemoteCursor[]>([]);
-    const [ask, setAsk] = useState<{
-        requestId: string;
-        fromParticipantId: string;
-        fromName: string;
-        slot: 0 | 1;
-    } | null>(null);
+    const [asks, setAsks] = useState<MarkerAsk[]>([]);
+    const [keptTick, setKeptTick] = useState<{ slot: 0 | 1; n: number } | null>(null);
     const [now, setNow] = useState(Date.now());
     const [toast, setToast] = useState<string | null>(null);
     const [namePending, setNamePending] = useState(false);
@@ -335,25 +331,53 @@ export function TableRoom({
                 const slots = message.slots as [string | null, string | null] | undefined;
                 if (slots) {
                     setTable((current) => (current ? { ...current, markers: slots } : current));
-                    setAsk((current) => {
-                        if (!current) {
-                            return current;
-                        }
-                        if (slots[current.slot] !== session.participantId) {
-                            return null;
-                        }
-                        return current;
-                    });
+                    setAsks((current) =>
+                        slots[0] === session.participantId || slots[1] === session.participantId
+                            ? current.filter((item) => slots[item.slot] === session.participantId)
+                            : []
+                    );
                 }
                 return;
             }
+            if (type === "marker_asks") {
+                const incoming = Array.isArray(message.asks) ? message.asks : [];
+                setAsks(
+                    incoming
+                        .map((item) => {
+                            const row = item as Record<string, unknown>;
+                            const parsed: MarkerAsk = {
+                                requestId: String(row.requestId ?? ""),
+                                fromParticipantId: String(row.fromParticipantId ?? ""),
+                                fromName: String(row.fromName ?? "Someone"),
+                                slot: row.slot === 1 ? 1 : 0,
+                            };
+                            return parsed;
+                        })
+                        .filter((item) => item.requestId)
+                );
+                return;
+            }
             if (type === "marker_ask") {
-                setAsk({
+                const next: MarkerAsk = {
                     requestId: String(message.requestId),
                     fromParticipantId: String(message.fromParticipantId),
                     fromName: String(message.fromName ?? "Someone"),
                     slot: message.slot === 1 ? 1 : 0,
+                };
+                setAsks((current) => {
+                    if (current.some((item) => item.requestId === next.requestId)) {
+                        return current;
+                    }
+                    return [...current, next];
                 });
+                return;
+            }
+            if (type === "marker_kept") {
+                setKeptTick((current) => ({
+                    slot: message.slot === 1 ? 1 : 0,
+                    n: (current?.n ?? 0) + 1,
+                }));
+                setToast("They kept the pen");
                 return;
             }
             if (type === "canvas_snapshot") {
@@ -531,7 +555,8 @@ export function TableRoom({
                 snapshot={snapshot}
                 remoteScene={remoteScene}
                 cursors={cursors.filter((cursor) => cursor.id !== session.participantId)}
-                ask={ask}
+                asks={asks}
+                keptTick={keptTick}
                 now={now}
                 voiceConfigured={voice.configured}
                 voiceUnlockNeeded={voice.configured === true && voice.unlockNeeded}
@@ -547,12 +572,9 @@ export function TableRoom({
                 onAsk={(fromParticipantId) => send({ type: "ask_marker", fromParticipantId })}
                 onAnswer={(requestId, give) => {
                     send({ type: "answer_marker", requestId, give });
-                    setAsk(null);
+                    setAsks((current) => current.filter((item) => item.requestId !== requestId));
                 }}
                 onHostTake={(slot) => send({ type: "host_take_marker", slot })}
-                onHostGive={(slot, toParticipantId) =>
-                    send({ type: "host_give_marker", slot, toParticipantId })
-                }
                 onAdmit={(participantId) => send({ type: "admit", participantId })}
                 onDeny={(participantId) => send({ type: "deny", participantId })}
                 onMode={(accessMode) => send({ type: "set_mode", accessMode })}

@@ -10,8 +10,11 @@ import { enqueueRoomEvent } from "./queue";
 import { deleteLivekitRooms } from "./livekit";
 import {
     appendReplay,
+    asksHeldBy,
+    clearAsksForSlot,
     createLiveRoom,
     dropMarkersHeldBy,
+    existingAsk,
     exportReplay,
     forgetLiveRoom,
     getLiveRoom,
@@ -22,6 +25,7 @@ import {
     liveRooms,
     newAsk,
     rememberLiveRoom,
+    retargetAsks,
     slotHeldBy,
     type LiveRoom,
     type Seat,
@@ -126,6 +130,51 @@ function broadcastMarkers(room: LiveRoom) {
     appendReplay(room, "marker", { slots: room.markers });
 }
 
+function askPayload(room: LiveRoom, ask: { requestId: string; fromParticipantId: string; slot: 0 | 1 }) {
+    const from = room.admitted.get(ask.fromParticipantId);
+    return {
+        requestId: ask.requestId,
+        fromParticipantId: ask.fromParticipantId,
+        fromName: from?.name ?? "Someone",
+        slot: ask.slot,
+    };
+}
+
+function sendAsks(room: LiveRoom, holderId: string) {
+    const holder = room.admitted.get(holderId);
+    if (!holder) {
+        return;
+    }
+    sendJson(holder.ws, {
+        type: "marker_asks",
+        asks: asksHeldBy(room, holderId).map((ask) => askPayload(room, ask)),
+    });
+}
+
+function refreshAsks(room: LiveRoom, extraIds: string[] = []) {
+    const ids = new Set<string>(extraIds);
+    for (const holderId of room.markers) {
+        if (holderId) {
+            ids.add(holderId);
+        }
+    }
+    for (const id of ids) {
+        sendAsks(room, id);
+    }
+}
+
+function moveMarker(room: LiveRoom, slot: 0 | 1, holderId: string | null, extraIds: string[] = []) {
+    const previous = room.markers[slot];
+    room.markers[slot] = holderId;
+    if (holderId) {
+        retargetAsks(room, slot, holderId);
+    } else {
+        clearAsksForSlot(room, slot);
+    }
+    broadcastMarkers(room);
+    refreshAsks(room, [...extraIds, previous].filter((id): id is string => Boolean(id)));
+}
+
 function closeSitting(room: LiveRoom, message = "This sitting is over") {
     const payload = { type: "expired", message };
     for (const seat of [...room.admitted.values(), ...room.waiting.values()]) {
@@ -158,6 +207,7 @@ function detachSocket(room: LiveRoom, ws: WebSocket) {
             if (markerChanged) {
                 broadcastMarkers(room);
             }
+            refreshAsks(room);
             broadcastRoomState(room);
             return;
         }
@@ -266,6 +316,7 @@ function admit(room: LiveRoom, connection: Connection) {
     sendJson(connection.ws, { type: "joined", slug: room.slug });
     sendJson(connection.ws, roomState(room, seat.participantId === room.hostParticipantId, false));
     sendJson(connection.ws, { type: "marker_state", slots: room.markers });
+    sendAsks(room, seat.participantId);
     sendJson(connection.ws, { type: "canvas_snapshot", payload: room.canvas ?? null });
     broadcastAdmitted(
         room,
@@ -588,8 +639,7 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "That marker is already taken");
                 return;
             }
-            room.markers[message.slot] = sessionOf(connection).participantId;
-            broadcastMarkers(room);
+            moveMarker(room, message.slot, sessionOf(connection).participantId);
             sendJson(connection.ws, {
                 type: "marker_ack",
                 slots: room.markers,
@@ -612,19 +662,14 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "You already have that marker");
                 return;
             }
+            const already = existingAsk(room, sessionOf(connection).participantId, holderId);
+            if (already) {
+                sendAsks(room, holderId);
+                return;
+            }
             const ask = newAsk(sessionOf(connection).participantId, holderId, slot);
             room.asks.set(ask.requestId, ask);
-            const holder = room.admitted.get(holderId);
-            const payload = {
-                type: "marker_ask",
-                requestId: ask.requestId,
-                fromParticipantId: ask.fromParticipantId,
-                fromName: sessionOf(connection).name,
-                slot: ask.slot,
-            };
-            if (holder) {
-                sendJson(holder.ws, payload);
-            }
+            sendAsks(room, holderId);
             return;
         }
 
@@ -644,15 +689,16 @@ async function handleMessage(connection: Connection, data: RawData) {
             }
             room.asks.delete(message.requestId);
             const asker = room.admitted.get(ask.fromParticipantId);
+            const oldHolder = ask.holderId;
             if (message.give && room.markers[ask.slot] === ask.holderId && asker) {
-                room.markers[ask.slot] = ask.fromParticipantId;
-                broadcastMarkers(room);
+                moveMarker(room, ask.slot, ask.fromParticipantId, [oldHolder]);
             } else if (asker) {
                 sendJson(asker.ws, {
                     type: "marker_kept",
                     slot: ask.slot,
                     holderId: ask.holderId,
                 });
+                sendAsks(room, oldHolder);
             }
             return;
         }
@@ -666,8 +712,7 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "You are not holding that marker");
                 return;
             }
-            room.markers[message.slot] = null;
-            broadcastMarkers(room);
+            moveMarker(room, message.slot, null, [sessionOf(connection).participantId]);
             return;
         }
 
@@ -684,8 +729,9 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "They are not at the table");
                 return;
             }
-            room.markers[message.slot] = message.toParticipantId;
-            broadcastMarkers(room);
+            moveMarker(room, message.slot, message.toParticipantId, [
+                sessionOf(connection).participantId,
+            ]);
             return;
         }
 
@@ -694,8 +740,7 @@ async function handleMessage(connection: Connection, data: RawData) {
             if (!room) {
                 return;
             }
-            room.markers[message.slot] = sessionOf(connection).participantId;
-            broadcastMarkers(room);
+            moveMarker(room, message.slot, sessionOf(connection).participantId);
             return;
         }
 
@@ -708,8 +753,7 @@ async function handleMessage(connection: Connection, data: RawData) {
                 sendError(connection.ws, "They are not at the table");
                 return;
             }
-            room.markers[message.slot] = message.toParticipantId;
-            broadcastMarkers(room);
+            moveMarker(room, message.slot, message.toParticipantId);
             return;
         }
 

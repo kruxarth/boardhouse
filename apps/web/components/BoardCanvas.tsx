@@ -365,6 +365,9 @@ export function BoardCanvas({
                         saveToActiveFile: false,
                         toggleTheme: false,
                         changeViewBackgroundColor: false,
+                        saveAsImage: false,
+                        clearCanvas: false,
+                        export: false,
                     },
                     welcomeScreen: false,
                 }}

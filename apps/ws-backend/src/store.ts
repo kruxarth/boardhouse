@@ -171,6 +171,40 @@ export function newAsk(
     };
 }
 
+export function existingAsk(room: LiveRoom, fromParticipantId: string, holderId: string) {
+    for (const ask of room.asks.values()) {
+        if (ask.fromParticipantId === fromParticipantId && ask.holderId === holderId) {
+            return ask;
+        }
+    }
+    return null;
+}
+
+export function clearAsksForSlot(room: LiveRoom, slot: 0 | 1) {
+    for (const [id, ask] of room.asks) {
+        if (ask.slot === slot) {
+            room.asks.delete(id);
+        }
+    }
+}
+
+export function retargetAsks(room: LiveRoom, slot: 0 | 1, holderId: string) {
+    for (const [id, ask] of room.asks) {
+        if (ask.slot !== slot) {
+            continue;
+        }
+        if (ask.fromParticipantId === holderId) {
+            room.asks.delete(id);
+            continue;
+        }
+        ask.holderId = holderId;
+    }
+}
+
+export function asksHeldBy(room: LiveRoom, holderId: string) {
+    return [...room.asks.values()].filter((ask) => ask.holderId === holderId);
+}
+
 export function isExpired(room: LiveRoom) {
     return room.expiresAt <= Date.now();
 }

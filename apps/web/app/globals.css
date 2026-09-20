@@ -665,12 +665,14 @@ select:focus-visible,
 .table-shell {
   height: 100dvh;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   background: var(--color-night);
   overflow: hidden;
 }
 
 .table-rail {
+  grid-column: 1 / -1;
   display: flex;
   flex-wrap: wrap;
   gap: 0.55rem 0.85rem;
@@ -800,66 +802,144 @@ select:focus-visible,
   margin-left: auto;
 }
 
+.icon-btn-quiet {
+  width: 1.7rem;
+  height: 1.7rem;
+  border-color: transparent;
+}
+
+.icon-btn-quiet .glyph {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
 .marker-row {
   display: flex;
   gap: 0.35rem;
 }
 
-.marker {
-  min-width: 0;
-  padding: 0.2rem;
+.pen-row {
+  display: flex;
+  gap: 0.45rem;
+  align-items: stretch;
+}
+
+.pen {
   display: flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.15rem;
+  min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--color-pink) 42%, transparent);
+  background: #000;
 }
 
-.marker-one {
-  background: var(--color-pink);
-  color: var(--color-ink);
+.pen-one {
+  box-shadow: inset 3px 0 0 var(--color-pink);
 }
 
-.marker-two {
-  background: #111;
-  color: var(--color-pink);
-  border: 1px solid var(--color-pink);
+.pen-two {
+  box-shadow: inset 3px 0 0 #1e1e1e;
 }
 
-.marker .icon-btn {
-  width: 2rem;
-  height: 2rem;
+.pen-mine {
+  border-color: var(--color-pink);
+}
+
+.pen-body {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0.2rem 0.5rem 0.2rem 0.35rem;
   border: 0;
   background: transparent;
   color: inherit;
+  font: inherit;
+  cursor: pointer;
+  min-height: 2.35rem;
 }
 
-.marker-one .icon-btn[aria-pressed="true"],
-.marker-two .icon-btn[aria-pressed="true"] {
-  outline: 1px solid currentColor;
+.pen-body:disabled {
+  cursor: default;
+  opacity: 0.75;
 }
 
-.marker-held {
-  font-size: 0.72rem;
-  max-width: 5.5rem;
-  line-height: 1.15;
+.pen-nib {
+  display: grid;
+  place-items: center;
+  width: 2.15rem;
+  height: 0.85rem;
+  color: var(--color-pink);
 }
 
-.give {
+.pen-one .pen-nib {
+  background: var(--color-pink);
+  color: #111;
+  clip-path: polygon(0 18%, 70% 18%, 100% 50%, 70% 82%, 0 82%);
+}
+
+.pen-two .pen-nib {
+  background: #111;
+  color: var(--color-pink);
+  clip-path: polygon(0 18%, 70% 18%, 100% 50%, 70% 82%, 0 82%);
+  box-shadow: inset 0 0 0 1px var(--color-pink);
+}
+
+.pen-nib .glyph {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.pen-who {
+  font-size: 0.78rem;
+  max-width: 6.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pen-free .pen-who {
+  color: var(--color-mist);
+}
+
+.pen-actions {
   display: flex;
-  gap: 0.3rem;
+  align-items: center;
+  gap: 0.2rem;
+  padding-right: 0.25rem;
 }
 
-.give select {
-  background: #000;
-  color: var(--color-paper);
+.pen-people {
+  display: flex;
+  gap: 0.2rem;
+  max-width: 9rem;
+  overflow-x: auto;
+}
+
+.pen-hand {
   border: 1px solid color-mix(in srgb, var(--color-pink) 40%, transparent);
-  max-width: 7rem;
+  background: transparent;
+  color: var(--color-paper);
+  font: inherit;
+  font-size: 0.7rem;
+  padding: 0.12rem 0.35rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pen-hand:hover,
+.pen-hand:focus-visible {
+  border-color: var(--color-pink);
+  color: var(--color-pink);
 }
 
 .board-wrap {
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   position: relative;
+  grid-column: 1;
 }
 
 .board-frame {
@@ -887,8 +967,68 @@ select:focus-visible,
 .board-frame .sidebar-trigger__label-element,
 .board-frame .default-sidebar-trigger,
 .board-frame .layer-ui__library,
-.board-frame .layer-ui__wrapper__top-right {
+.board-frame .layer-ui__wrapper__top-right,
+.board-frame .main-menu-trigger,
+.board-frame .dropdown-menu-button.main-menu-trigger,
+.board-frame .App-menu__left {
   display: none !important;
+}
+
+.table-drawer {
+  grid-column: 2;
+  grid-row: 2;
+  width: 16.5rem;
+  min-height: 0;
+  overflow: auto;
+  background: #000;
+  border-left: 1px solid color-mix(in srgb, var(--color-pink) 40%, transparent);
+  padding: 0.85rem 0.75rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.table-shell:not(.drawer-open) .table-drawer,
+.table-drawer[hidden] {
+  display: none;
+}
+
+.drawer-kicker {
+  margin: 0 0 0.4rem;
+  font-family: var(--font-display);
+  color: var(--color-pink);
+}
+
+.drawer-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  margin: 0;
+  padding: 0.45rem 0.5rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-paper);
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.drawer-item:hover,
+.drawer-item:focus-visible {
+  border-color: color-mix(in srgb, var(--color-pink) 45%, transparent);
+  color: var(--color-pink);
+}
+
+.drawer-item .glyph {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: none;
+}
+
+.drawer-item-danger {
+  margin-top: 0.4rem;
 }
 
 .host-tools {
@@ -914,14 +1054,26 @@ select:focus-visible,
 }
 
 .knock-list {
-  position: fixed;
-  right: 0.75rem;
-  top: 3.6rem;
-  width: min(18rem, calc(100vw - 2rem));
+  width: 100%;
   background: #000;
   border: 1px solid var(--color-pink);
   padding: 0.8rem;
+}
+
+.table-queues {
+  position: absolute;
+  right: 0.75rem;
+  top: 0.75rem;
+  width: min(18rem, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
   z-index: 40;
+  pointer-events: none;
+}
+
+.table-queues .knock-list {
+  pointer-events: auto;
 }
 
 .knock-list p {
@@ -946,18 +1098,10 @@ select:focus-visible,
   justify-content: space-between;
 }
 
-.ask-banner {
-  display: flex;
-  gap: 0.6rem;
-  align-items: center;
-  padding: 0.4rem 0.8rem;
-  background: color-mix(in srgb, var(--color-pink) 22%, #000);
-  z-index: 5;
-}
-
-.ask-banner p {
-  margin: 0;
-  flex: 1;
+.knock-list li span em {
+  font-style: normal;
+  color: var(--color-mist);
+  font-size: 0.78rem;
 }
 
 .hear-banner {
@@ -1133,15 +1277,18 @@ select:focus-visible,
 }
 
 @media (max-width: 720px) {
-  .rail-actions,
-  .host-tools {
+  .rail-actions {
     margin-left: 0;
   }
 
-  .knock-list {
+  .table-queues {
     position: static;
     width: auto;
-    margin: 0.4rem;
+    padding: 0.45rem 0.45rem 0;
+  }
+
+  .table-drawer {
+    width: min(16.5rem, 80vw);
   }
 
   .table-shell {
