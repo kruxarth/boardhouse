@@ -82,6 +82,7 @@ export function houseOccupancy(
         name: room.name,
         hostName: room.hostName.trim() || "Someone",
         expiresAt: room.expiresAt.toISOString(),
+        quietMs: room.emptySince ? Math.max(0, Date.now() - room.emptySince.getTime()) : 0,
     }));
     return {
         used: occupied.length,

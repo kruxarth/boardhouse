@@ -34,7 +34,7 @@ export function ClaimTable({
         >
             <p className="door-kicker">
                 {unused
-                    ? "This table went quiet. Name it and it is yours."
+                    ? "This table has been quiet for ten minutes. Claiming it wipes the old board and starts your sitting."
                     : "What should we call this table?"}
             </p>
             <input

@@ -247,7 +247,7 @@ export default function Home() {
                                             {ready && !houseFull ? (
                                                 <p className="frontdoor-hint">
                                                     {unusedOpen
-                                                        ? "A quiet window can be claimed and renamed."
+                                                        ? "A dim window has been quiet for ten minutes. Claim it and the old board is wiped."
                                                         : session
                                                           ? "Pick a dark window and name the table."
                                                           : "No key? Pick a dark window and sit down."}
@@ -277,8 +277,8 @@ export default function Home() {
                     <li>Mics work like a call. The host can mute you; only you unmute yourself.</li>
                     <li>
                         Every table is wiped at twenty-four hours. After ten minutes with nobody
-                        seated, anyone can claim the unused window and rename it. Save the board if
-                        you want it.
+                        seated, the window goes dim. Anyone can claim it, rename it, and wipe the
+                        old board. Save first if you want it.
                     </li>
                 </ul>
             </footer>

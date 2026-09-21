@@ -1096,6 +1096,11 @@ setInterval(() => {
                 closeSitting(room);
                 continue;
             }
+            if (room.admitted.size === 0) {
+                markTableEmpty(room);
+            } else {
+                markTableOccupied(room);
+            }
             try {
                 const row = await prismaClient.room.findUnique({
                     where: { id: room.id },

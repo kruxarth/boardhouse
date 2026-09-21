@@ -41,9 +41,12 @@ export function HouseWindow({
     const host = table.hostName?.trim() || "Someone";
 
     if (table.unused) {
+        const quietMin = Math.max(10, Math.floor((table.quietMs ?? 0) / 60_000));
+        const quietLabel =
+            quietMin >= 120 ? `Quiet ${Math.floor(quietMin / 60)}h` : `Quiet ${quietMin}m`;
         return (
             <button
-                aria-label={`Table ${index}, unused. ${title}. Claim this table.`}
+                aria-label={`Table ${index}, inactive for ${quietMin} minutes. ${title}. Claim this table.`}
                 className="window window-unused"
                 disabled={disabled}
                 onClick={() => onUnused(table.slug)}
@@ -56,7 +59,8 @@ export function HouseWindow({
                 </span>
                 <span className="win-body">
                     <span className="win-title">{title}</span>
-                    <span className="win-host">Unused</span>
+                    <span className="win-host">Inactive</span>
+                    <span className="win-quiet">{quietLabel}</span>
                 </span>
                 <span className="win-cta">Claim this</span>
             </button>

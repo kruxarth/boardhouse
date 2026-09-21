@@ -137,23 +137,57 @@ function paintCollaborators(api: ExcalidrawApi | null, cursors: RemoteCursor[]) 
     });
 }
 
+function readAppState(api: ExcalidrawApi | null) {
+    if (!api) {
+        return null;
+    }
+    return api.getAppState() as {
+        scrollX?: number;
+        scrollY?: number;
+        zoom?: number | { value?: number };
+        offsetLeft?: number;
+        offsetTop?: number;
+        activeTool?: { type?: string };
+    };
+}
+
+function zoomOf(appState: { zoom?: number | { value?: number } } | null) {
+    if (!appState) {
+        return 1;
+    }
+    return typeof appState.zoom === "number" ? appState.zoom : (appState.zoom?.value ?? 1);
+}
+
+function clientToScene(clientX: number, clientY: number, api: ExcalidrawApi | null) {
+    const appState = readAppState(api);
+    const zoom = zoomOf(appState);
+    return {
+        x: (clientX - (appState?.offsetLeft ?? 0)) / zoom - (appState?.scrollX ?? 0),
+        y: (clientY - (appState?.offsetTop ?? 0)) / zoom - (appState?.scrollY ?? 0),
+        activeTool: appState?.activeTool?.type,
+    };
+}
+
+function isBoardChrome(target: EventTarget | null) {
+    return target instanceof Element
+        ? Boolean(
+              target.closest(
+                  "button, a, input, textarea, select, label, .App-toolbar, .App-toolbar-container, .shapes-section, .App-menu, .App-menu__left, .zoom-actions, .undo-redo-buttons, .sidebar, .ToolIcon"
+              )
+          )
+        : false;
+}
+
 function sceneToFrame(
     sceneX: number,
     sceneY: number,
     api: ExcalidrawApi,
     frame: HTMLElement
 ) {
-    const appState = api.getAppState() as {
-        scrollX?: number;
-        scrollY?: number;
-        zoom?: number | { value?: number };
-        offsetLeft?: number;
-        offsetTop?: number;
-    };
-    const zoom =
-        typeof appState.zoom === "number" ? appState.zoom : (appState.zoom?.value ?? 1);
-    const clientX = (sceneX + (appState.scrollX ?? 0)) * zoom + (appState.offsetLeft ?? 0);
-    const clientY = (sceneY + (appState.scrollY ?? 0)) * zoom + (appState.offsetTop ?? 0);
+    const appState = readAppState(api);
+    const zoom = zoomOf(appState);
+    const clientX = (sceneX + (appState?.scrollX ?? 0)) * zoom + (appState?.offsetLeft ?? 0);
+    const clientY = (sceneY + (appState?.scrollY ?? 0)) * zoom + (appState?.offsetTop ?? 0);
     const rect = frame.getBoundingClientRect();
     return { x: clientX - rect.left, y: clientY - rect.top };
 }
@@ -481,6 +515,69 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
             pointerMoveThrottled.cancel();
         };
     }, [pointerMoveThrottled]);
+
+    useEffect(() => {
+        if (playback || !apiReady) {
+            return;
+        }
+        const frame = frameRef.current;
+        if (!frame) {
+            return;
+        }
+        frame.dataset.laserListen = "1";
+
+        const toolFor = (activeTool?: string): PointerTool =>
+            !canDrawRef.current || activeTool === "laser" ? "laser" : "pointer";
+
+        const emit = (clientX: number, clientY: number, button: PointerButton, immediate: boolean) => {
+            const scene = clientToScene(clientX, clientY, apiRef.current);
+            const tool = toolFor(scene.activeTool);
+            lastPointRef.current = { x: scene.x, y: scene.y, tool };
+            lastPointerButtonRef.current = button;
+            if (immediate) {
+                pointerMoveThrottled.cancel();
+                onCursorRef.current(scene.x, scene.y, tool, button);
+                return;
+            }
+            pointerMoveThrottled(scene.x, scene.y, tool, button);
+        };
+
+        const onDown = (event: PointerEvent) => {
+            if (event.isPrimary === false || event.button !== 0 || isBoardChrome(event.target)) {
+                return;
+            }
+            if (!canDrawRef.current) {
+                syncTool(false, true);
+            }
+            pointerDownRef.current = true;
+            emit(event.clientX, event.clientY, "down", true);
+        };
+        const onMove = (event: PointerEvent) => {
+            if (event.isPrimary === false || isBoardChrome(event.target)) {
+                return;
+            }
+            const button: PointerButton = pointerDownRef.current ? "down" : "up";
+            emit(event.clientX, event.clientY, button, false);
+        };
+        const onUp = (event: PointerEvent) => {
+            if (event.isPrimary === false || !pointerDownRef.current) {
+                return;
+            }
+            pointerDownRef.current = false;
+            emit(event.clientX, event.clientY, "up", true);
+        };
+
+        frame.addEventListener("pointerdown", onDown, true);
+        frame.addEventListener("pointermove", onMove, true);
+        window.addEventListener("pointerup", onUp, true);
+        window.addEventListener("pointercancel", onUp, true);
+        return () => {
+            frame.removeEventListener("pointerdown", onDown, true);
+            frame.removeEventListener("pointermove", onMove, true);
+            window.removeEventListener("pointerup", onUp, true);
+            window.removeEventListener("pointercancel", onUp, true);
+        };
+    }, [apiReady, playback, pointerMoveThrottled, syncTool]);
 
     const applyWhenReady = useCallback(
         (payload: unknown, replace = false) => {

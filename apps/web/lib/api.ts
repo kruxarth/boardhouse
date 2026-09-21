@@ -17,6 +17,7 @@ export type HouseTable =
           name: string | null;
           hostName: string;
           expiresAt: string;
+          quietMs?: number;
       };
 
 export type CreatedRoom = {
