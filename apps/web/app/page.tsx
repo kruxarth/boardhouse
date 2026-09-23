@@ -1,14 +1,69 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { ClaimTable } from "../components/ClaimTable";
-import { RoofArt, SkyArt } from "../components/HouseArt";
+import {
+    DoorSketch,
+    GroundSketch,
+    MarkerDefs,
+    MarkerLedge,
+    RoofSketch,
+    WallSketch,
+    WindowLines,
+} from "../components/HouseArt";
 import { HouseWindow } from "../components/HouseWindow";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
 import { installAudioPrime, primeAudio } from "../lib/sounds";
+
+function LinkFields({
+    link,
+    inputId,
+    sitDisabled,
+    onLink,
+    onSubmit,
+    onSit,
+}: {
+    link: string;
+    inputId: string;
+    sitDisabled: boolean;
+    onLink: (value: string) => void;
+    onSubmit: (event: FormEvent) => void;
+    onSit: () => void;
+}) {
+    const walk = link.trim().length > 0;
+    return (
+        <form className="wb-form" onSubmit={onSubmit}>
+            <label className="sr-only" htmlFor={inputId}>
+                Paste a table link
+            </label>
+            <input
+                className="wb-input"
+                id={inputId}
+                onChange={(event) => onLink(event.target.value)}
+                placeholder="Paste a table link"
+                value={link}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+            />
+            <button
+                className="wb-primary"
+                disabled={!walk && sitDisabled}
+                onClick={() => {
+                    if (!walk) {
+                        onSit();
+                    }
+                }}
+                type={walk ? "submit" : "button"}
+            >
+                {walk ? "Walk in" : "Sit down"}
+            </button>
+        </form>
+    );
+}
 
 export default function Home() {
     const router = useRouter();
@@ -20,9 +75,29 @@ export default function Home() {
     const [pending, setPending] = useState(false);
     const [claiming, setClaiming] = useState(false);
     const [claimingSlug, setClaimingSlug] = useState<string | null>(null);
+    const [wipingSlug, setWipingSlug] = useState<string | null>(null);
+    const [ink, setInk] = useState(false);
+    const [doorVisible, setDoorVisible] = useState(false);
+    const doorRef = useRef<HTMLDivElement>(null);
 
     useEffect(() => {
         installAudioPrime();
+    }, []);
+
+    useEffect(() => {
+        const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        if (reduce) {
+            setInk(true);
+            return;
+        }
+        const wait = Math.max(0, 1120 - performance.now());
+        const timer = window.setTimeout(() => setInk(true), wait);
+        return () => window.clearTimeout(timer);
+    }, []);
+
+    useEffect(() => {
+        document.body.classList.add("wb-body");
+        return () => document.body.classList.remove("wb-body");
     }, []);
 
     useEffect(() => {
@@ -49,9 +124,36 @@ export default function Home() {
         };
     }, []);
 
+    useEffect(() => {
+        const node = doorRef.current;
+        if (!node) {
+            return;
+        }
+        const observer = new IntersectionObserver(
+            (entries) => {
+                const entry = entries[0];
+                if (!entry) {
+                    return;
+                }
+                setDoorVisible(entry.isIntersecting && entry.intersectionRatio >= 0.55);
+            },
+            { threshold: [0, 0.55, 1], rootMargin: "0px 0px -72px 0px" }
+        );
+        observer.observe(node);
+        return () => observer.disconnect();
+    }, [houseDown, occupancy]);
+
     const tables = occupancy?.tables ?? null;
     const unusedOpen = tables?.some((table) => !table.empty && table.unused) ?? false;
     const houseFull = occupancy !== null && occupancy.used >= occupancy.max && !unusedOpen;
+    const someoneHome = tables?.some((table) => !table.empty && !table.unused) ?? false;
+    const firstDark = tables?.findIndex((table) => table.empty) ?? -1;
+    const tracedIndex = claiming
+        ? claimingSlug
+            ? (tables?.findIndex((table) => !table.empty && table.slug === claimingSlug) ?? -1)
+            : firstDark
+        : -1;
+    const sitDisabled = pending || !ready || houseFull || firstDark < 0;
 
     async function openTable(payload: { name?: string; tableName: string }) {
         primeAudio();
@@ -67,10 +169,16 @@ export default function Home() {
         try {
             const nextSession = await sessionForSitting(readSession(), payload.name);
             setSession(nextSession);
-            const room = claimingSlug
-                ? await claimRoom(nextSession.token, claimingSlug, sittingName)
+            const wiped = claimingSlug;
+            const room = wiped
+                ? await claimRoom(nextSession.token, wiped, sittingName)
                 : await createRoom(nextSession.token, sittingName);
             rememberHostKey(room.slug, room.hostKey);
+            const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+            if (wiped && !reduce) {
+                setWipingSlug(wiped);
+                await new Promise((resolve) => window.setTimeout(resolve, 520));
+            }
             router.push(room.hostPath);
         } catch (err) {
             const message = err instanceof Error ? err.message : "Could not open a table";
@@ -107,17 +215,25 @@ export default function Home() {
         }
         setClaimingSlug(slug ?? null);
         setClaiming(true);
+        setError("");
+        if (window.matchMedia("(max-width: 640px)").matches) {
+            const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+            window.requestAnimationFrame(() => {
+                doorRef.current?.scrollIntoView({
+                    behavior: reduce ? "auto" : "smooth",
+                    block: "center",
+                });
+            });
+        }
     }
 
-    function onEmptyTable() {
-        beginClaim();
+    function cancelClaim() {
+        setClaiming(false);
+        setClaimingSlug(null);
+        setError("");
     }
 
-    function onUnusedTable(slug: string) {
-        beginClaim(slug);
-    }
-
-    function openLink(event: React.FormEvent) {
+    function openLink(event: FormEvent) {
         event.preventDefault();
         primeAudio();
         const trimmed = link.trim();
@@ -142,157 +258,122 @@ export default function Home() {
         }
     }
 
-    function renderFloor(from: number, to: number) {
+    function renderWindow(offset: number) {
+        const index = offset + 1;
+        const table = tables?.[offset];
+        if (!table) {
+            return (
+                <li key={`wait-${index}`}>
+                    <div className="wb-win wb-win-wait">
+                        <WindowLines faint index={index} />
+                    </div>
+                </li>
+            );
+        }
         return (
-            <ol className="floor">
-                {tables
-                    ? tables.slice(from, to).map((table, offset) => {
-                          const index = from + offset + 1;
-                          return (
-                              <li key={table.empty ? `empty-${index}` : table.slug}>
-                                  <HouseWindow
-                                      index={index}
-                                      table={table}
-                                      disabled={pending || !ready}
-                                      onEmpty={onEmptyTable}
-                                      onUnused={onUnusedTable}
-                                      onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
-                                  />
-                              </li>
-                          );
-                      })
-                    : Array.from({ length: to - from }, (_, offset) => (
-                          <li key={`wait-${from + offset}`}>
-                              <div className="window window-dark window-wait" />
-                          </li>
-                      ))}
-            </ol>
+            <li key={table.empty ? `empty-${index}` : table.slug}>
+                <HouseWindow
+                    disabled={pending || !ready}
+                    index={index}
+                    onEmpty={() => beginClaim()}
+                    onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
+                    onUnused={(slug) => beginClaim(slug)}
+                    table={table}
+                    traced={offset === tracedIndex}
+                    wiping={!table.empty && table.slug === wipingSlug}
+                />
+            </li>
         );
     }
 
+    const doorNote = houseFull
+        ? "Every table is taken. A window frees up when it's been quiet for 10 minutes."
+        : "Pick a dark window to host, or knock on a lit one.";
+
     return (
-        <div className="house">
-            <header className="house-lintel">
-                <div>
-                    <h1 className="house-sign">board-house</h1>
-                    <p className="lede">Ten tables. Closed doors. One day.</p>
-                </div>
-                <p className="plate">{occupancy ? `${occupancy.used} / ${occupancy.max}` : "— / 10"}</p>
-            </header>
+        <div className={ink ? "wb wb-ink" : "wb"}>
+            <MarkerDefs />
+            <div className="wb-board">
+                <header className="wb-header">
+                    <div className="wb-brand">
+                        <h1 className="wb-wordmark">board-house</h1>
+                        <p className="wb-tagline">Ten tables. Closed doors. One day.</p>
+                        <p className="wb-note">Ten seats. Two markers. Wiped after a day.</p>
+                    </div>
+                    <p className="wb-count">
+                        {occupancy
+                            ? `${occupancy.used} of ${occupancy.max} tables in use`
+                            : "— of 10 tables in use"}
+                    </p>
+                </header>
 
-            {error ? <p className="error">{error}</p> : null}
-
-            <main className="scene">
-                <SkyArt />
-                <div className="dwelling">
-                    <RoofArt />
-                    <div className="facade">
-                        {renderFloor(0, 4)}
-                        {renderFloor(4, 8)}
-                        <div className="ground">
-                            <ol className="floor floor-ground">
-                                {tables
-                                    ? tables.slice(8, 10).map((table, offset) => {
-                                          const index = 8 + offset + 1;
-                                          return (
-                                              <li key={table.empty ? `empty-${index}` : table.slug}>
-                                                  <HouseWindow
-                                                      index={index}
-                                                      table={table}
-                                                      disabled={pending || !ready}
-                                                      onEmpty={onEmptyTable}
-                                                      onUnused={onUnusedTable}
-                                                      onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
-                                                  />
-                                              </li>
-                                          );
-                                      })
-                                    : Array.from({ length: 2 }, (_, offset) => (
-                                          <li key={`wait-${8 + offset}`}>
-                                              <div className="window window-dark window-wait" />
-                                          </li>
-                                      ))}
-                            </ol>
-                            <div className="frontdoor">
-                                <div className="frontdoor-arch">
-                                    <span className="knob" aria-hidden="true" />
-                                    <p className="frontdoor-oneliner">
-                                        Ten seats. Two markers. The board is wiped after a day.
-                                    </p>
-                                    {ready && claiming ? (
-                                        <>
-                                            <ClaimTable
-                                                needName={!session}
-                                                pending={pending}
-                                                unused={Boolean(claimingSlug)}
-                                                onSubmit={(payload) => void openTable(payload)}
-                                            />
-                                            <button
-                                                className="btn btn-ghost"
-                                                onClick={() => {
-                                                    setClaiming(false);
-                                                    setClaimingSlug(null);
-                                                }}
-                                                type="button"
-                                            >
-                                                Cancel
-                                            </button>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <p className="frontdoor-kicker">The front door</p>
-                                            {houseFull ? (
-                                                <p className="vacancy-tag">Full house</p>
-                                            ) : null}
-                                            <form className="frontdoor-form" onSubmit={openLink}>
-                                                <input
-                                                    className="field"
-                                                    onChange={(event) => setLink(event.target.value)}
-                                                    placeholder="Paste a table link"
-                                                    value={link}
-                                                />
-                                                <button className="btn btn-ghost" type="submit">
-                                                    Walk in
-                                                </button>
-                                            </form>
-                                            {ready && !houseFull ? (
-                                                <p className="frontdoor-hint">
-                                                    {unusedOpen
-                                                        ? "A dim window has been quiet. Claiming it wipes the previous host's board."
-                                                        : session
-                                                          ? "Pick a dark window and name the table."
-                                                          : "No key? Pick a dark window and sit down."}
-                                                </p>
-                                            ) : null}
-                                        </>
-                                    )}
-                                </div>
+                {houseDown ? (
+                    <p className="wb-locked" role="alert">
+                        The house is locked from this site. Check FRONTEND_URL on HTTP, then reload.
+                    </p>
+                ) : (
+                    <div className="wb-stage">
+                        <div className="wb-house">
+                            <RoofSketch home={someoneHome} />
+                            <div className={tables ? "wb-facade" : "wb-facade wb-waiting"}>
+                                <WallSketch />
+                                <ol aria-label="Tables" className="wb-grid">
+                                    {Array.from({ length: 10 }, (_, offset) => renderWindow(offset))}
+                                    <li className="wb-door-cell">
+                                        <div className="wb-door" ref={doorRef}>
+                                            <DoorSketch />
+                                            <div className="wb-door-panel">
+                                                {error ? (
+                                                    <p className="wb-error" role="alert">
+                                                        {error}
+                                                    </p>
+                                                ) : null}
+                                                {ready && claiming ? (
+                                                    <ClaimTable
+                                                        needName={!session}
+                                                        onCancel={cancelClaim}
+                                                        onSubmit={(payload) => void openTable(payload)}
+                                                        pending={pending}
+                                                        unused={Boolean(claimingSlug)}
+                                                    />
+                                                ) : (
+                                                    <>
+                                                        <LinkFields
+                                                            inputId="table-link"
+                                                            link={link}
+                                                            onLink={setLink}
+                                                            onSit={() => beginClaim()}
+                                                            onSubmit={openLink}
+                                                            sitDisabled={sitDisabled}
+                                                        />
+                                                        <p className="wb-hint">{doorNote}</p>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </li>
+                                </ol>
                             </div>
+                            <GroundSketch />
                         </div>
                     </div>
-                    <div className="street" aria-hidden="true" />
-                </div>
-                {tables ? null : (
-                    <p className="scene-wait" role="status">
-                        {houseDown
-                            ? "The house is locked from this site. Check FRONTEND_URL on HTTP, then reload."
-                            : "The house is waking up."}
-                    </p>
                 )}
-            </main>
+                <MarkerLedge />
+            </div>
 
-            <footer>
-                <ul className="house-rules">
-                    <li>Ten seats at a table. No spectators.</li>
-                    <li>Two markers move. Everyone else points.</li>
-                    <li>Mics work like a call. The host can mute you; only you unmute yourself.</li>
-                    <li>
-                        Every table is wiped at twenty-four hours. After ten minutes with nobody
-                        seated, the window goes dim. Anyone can claim it, rename it, and wipe the
-                        old board. Save first if you want it.
-                    </li>
-                </ul>
-            </footer>
+            {houseDown ? null : (
+                <div className={doorVisible ? "wb-doorstep wb-doorstep-hide" : "wb-doorstep"}>
+                    {error ? <p className="wb-error">{error}</p> : null}
+                    <LinkFields
+                        inputId="table-link-step"
+                        link={link}
+                        onLink={setLink}
+                        onSit={() => beginClaim()}
+                        onSubmit={openLink}
+                        sitDisabled={sitDisabled}
+                    />
+                </div>
+            )}
         </div>
     );
 }

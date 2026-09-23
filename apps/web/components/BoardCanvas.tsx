@@ -71,9 +71,8 @@ export type RemoteCursor = {
 
 const MAX_SCENE_BYTES = MAX_CANVAS_MESSAGE_BYTES - 64;
 
-export const MARKER_INK = ["#f386a1", "#1e1e1e"] as const;
-/** Warm paper, the same lamp colour as a lit window. */
-export const BOARD_BACKGROUND = "#f6f1e6";
+export const MARKER_INK = ["#E23A74", "#1D2946"] as const;
+export const BOARD_BACKGROUND = "#F3F6F8";
 
 function serializeScene(elements: unknown, files: unknown) {
     try {
@@ -130,8 +129,8 @@ function collaboratorColor(id: string) {
         hash = (hash + id.charCodeAt(i)) % 2;
     }
     return hash === 0
-        ? { background: "#f386a1", stroke: "#1e1e1e" }
-        : { background: "#1e1e1e", stroke: "#f386a1" };
+        ? { background: MARKER_INK[0], stroke: MARKER_INK[1] }
+        : { background: MARKER_INK[1], stroke: MARKER_INK[0] };
 }
 
 function collaboratorsFromCursors(cursors: RemoteCursor[]) {
@@ -912,7 +911,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     appState: {
                         viewBackgroundColor: BOARD_BACKGROUND,
                         currentItemStrokeColor:
-                            markerSlot === null ? "#1e1e1e" : MARKER_INK[markerSlot],
+                            markerSlot === null ? MARKER_INK[1] : MARKER_INK[markerSlot],
                     },
                 }}
                 zenModeEnabled={false}

@@ -20,7 +20,7 @@ export function InviteCard({
                     type: "svg",
                     margin: 1,
                     width: 168,
-                    color: { dark: "#1e1e1e", light: "#f6f1e6" },
+                    color: { dark: "#1D2946", light: "#F3F6F8" },
                 });
                 if (!cancelled) {
                     setSvg(markup);

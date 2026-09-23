@@ -7,18 +7,20 @@ export function ClaimTable({
     pending,
     unused,
     onSubmit,
+    onCancel,
 }: {
     needName: boolean;
     pending?: boolean;
     unused?: boolean;
     onSubmit: (payload: { name?: string; tableName: string }) => void;
+    onCancel: () => void;
 }) {
     const [name, setName] = useState("");
     const [tableName, setTableName] = useState("");
 
     return (
         <form
-            className="door-form"
+            className="wb-form"
             onSubmit={(event) => {
                 event.preventDefault();
                 const sitting = tableName.trim();
@@ -32,38 +34,50 @@ export function ClaimTable({
                 onSubmit(needName ? { name: person, tableName: sitting } : { tableName: sitting });
             }}
         >
-            <p className="door-kicker">
-                {unused
-                    ? "Claiming this table wipes the previous host's board. Their drawing is deleted."
-                    : "What should we call this table?"}
-            </p>
+            {unused ? (
+                <p className="wb-warn">
+                    Claiming this table wipes the previous host&apos;s board. Their drawing is deleted.
+                </p>
+            ) : null}
+            <label className="sr-only" htmlFor="table-name">
+                Name this table
+            </label>
             <input
                 autoFocus
-                className="field"
+                className="wb-input"
+                id="table-name"
                 maxLength={40}
                 minLength={1}
                 name="table-name"
                 onChange={(event) => setTableName(event.target.value)}
-                placeholder="Name this sitting"
+                placeholder="Name this table"
                 value={tableName}
             />
             {needName ? (
                 <>
-                    <p className="door-kicker">What should we call you?</p>
+                    <label className="sr-only" htmlFor="host-name">
+                        Your name
+                    </label>
                     <input
-                        className="field"
+                        className="wb-input"
+                        id="host-name"
                         maxLength={24}
                         minLength={2}
                         name="display-name"
                         onChange={(event) => setName(event.target.value)}
-                        placeholder="Your name at the table"
+                        placeholder="Your name"
                         value={name}
                     />
                 </>
             ) : null}
-            <button className="btn btn-brass" disabled={pending} type="submit">
-                {unused ? "Claim this table" : "Sit down"}
-            </button>
+            <div className="wb-actions">
+                <button className="wb-primary" disabled={pending} type="submit">
+                    {unused ? "Claim and wipe" : "Sit down"}
+                </button>
+                <button className="wb-cancel" onClick={onCancel} type="button">
+                    Cancel
+                </button>
+            </div>
         </form>
     );
 }
