@@ -1,13 +1,5 @@
-import {
-    AccessToken,
-    RoomServiceClient,
-    TrackSource,
-} from "livekit-server-sdk";
-import {
-    LIVEKIT_API_KEY,
-    LIVEKIT_API_SECRET,
-    LIVEKIT_URL,
-} from "@repo/backend-common/config";
+import { AccessToken, RoomServiceClient, TrackSource } from "livekit-server-sdk";
+import { LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL } from "./secrets";
 
 export function livekitConfigured() {
     return Boolean(LIVEKIT_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET);
@@ -48,18 +40,19 @@ export async function mintLivekitToken(options: {
 }
 
 export async function deleteLivekitRoom(slug: string) {
-    if (!livekitConfigured()) {
+    await deleteLivekitRooms([slug]);
+}
+
+export async function deleteLivekitRooms(slugs: string[]) {
+    if (!livekitConfigured() || slugs.length === 0) {
         return;
     }
-
-    try {
-        const client = new RoomServiceClient(
-            LIVEKIT_URL,
-            LIVEKIT_API_KEY,
-            LIVEKIT_API_SECRET
-        );
-        await client.deleteRoom(livekitRoomName(slug));
-    } catch {
-        // Room may never have been created.
+    const client = new RoomServiceClient(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+    for (const slug of slugs) {
+        try {
+            await client.deleteRoom(livekitRoomName(slug));
+        } catch {
+            // Room may never have been created.
+        }
     }
 }

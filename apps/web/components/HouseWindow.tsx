@@ -95,9 +95,11 @@ export function HouseWindow({
         );
     }
 
+    const seated = table.seated ?? 0;
+
     return (
         <button
-            aria-label={`Table ${index}, ${title}. Host ${host}. Knock.`}
+            aria-label={`Table ${index}, ${title}. Host ${host}.${seated > 0 ? ` ${seated} seated.` : ""} Knock.`}
             className="window window-lit"
             disabled={disabled}
             onClick={() => onOccupied(table.slug)}
@@ -109,10 +111,15 @@ export function HouseWindow({
             <span className="win-no" aria-hidden="true">
                 {index}
             </span>
-            <span className="win-body">
-                <span className="win-title">{title}</span>
-                <span className="win-host">Host {host}</span>
-            </span>
+                <span className="win-body">
+                    <span className="win-title">{title}</span>
+                    <span className="win-host">Host {host}</span>
+                    {seated > 0 ? (
+                        <span className="win-count">
+                            {seated === 1 ? "1 seated" : `${seated} seated`}
+                        </span>
+                    ) : null}
+                </span>
             <span className="win-cta">Knock</span>
         </button>
     );

@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
     "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts"
   },
@@ -15,8 +15,8 @@
     "@repo/typescript-config": "workspace:*",
     "cors": "^2.8.6",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
-    "livekit-server-sdk": "^2.15.0",
     "tsx": "^4.23.12"
   },
   "devDependencies": {

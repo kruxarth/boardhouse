@@ -1,17 +1,19 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import type { AskOutcome, RoomStatePayload } from "@repo/common/types";
+import { KNOCK_COOLDOWN_MS } from "@repo/common/constants";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { useSocket } from "../hooks/useSocket";
+import { useTableSocket, type DoorKind } from "../hooks/useTableSocket";
 import { useVoice } from "../hooks/useVoice";
 import { createSession, fetchRoom, isUnauthorizedError, refreshSession } from "../lib/api";
 import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
+import { installAudioPrime, primeAudio } from "../lib/sounds";
 import type { BoardHandle, RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
-import { avatarFromId, withUniqueAvatars } from "./Avatars";
 import type { RecapEvent } from "./SittingRecap";
 import {
     doorCopy,
@@ -23,36 +25,14 @@ import {
     type TableModel,
 } from "./TableShell";
 
-const REACTION_LIFE_MS = 2_800;
-
-type DoorKind =
-    | "need-name"
-    | "connecting"
-    | "waiting"
-    | "denied"
-    | "full"
-    | "expired"
-    | "missing"
-    | "error"
-    | "joined";
-
-function asTable(state: RoomStatePayload): TableModel {
-    const taken = new Set<number>();
-    const seats = withUniqueAvatars(state.seats ?? [], taken);
-    const waiters = withUniqueAvatars(state.waiters ?? [], taken);
-    return {
-        slug: state.slug,
-        name: state.name,
-        accessMode: state.accessMode,
-        expiresAt: state.expiresAt,
-        hostParticipantId: state.hostParticipantId,
-        seats,
-        waiters,
-        markers: state.markers,
-        viaFormerSlug: state.viaFormerSlug,
-        usedSeats: state.usedSeats,
-        maxSeats: state.maxSeats,
-    };
+function waitedLabel(ms: number) {
+    const seconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    if (minutes <= 0) {
+        return `${rest}s`;
+    }
+    return `${minutes}m ${rest}s`;
 }
 
 export function TableRoom({
@@ -78,16 +58,19 @@ export function TableRoom({
     const [reactions, setReactions] = useState<LiveReaction[]>([]);
     const [now, setNow] = useState(Date.now());
     const [toast, setToast] = useState<string | null>(null);
+    const [waitStarted, setWaitStarted] = useState(0);
+    const [knockReadyAt, setKnockReadyAt] = useState(0);
+    const [knockNote, setKnockNote] = useState("");
     const [namePending, setNamePending] = useState(false);
     const [recapEvents, setRecapEvents] = useState<RecapEvent[] | null>(null);
     const boardRef = useRef<BoardHandle | null>(null);
     const awaitingReplayRef = useRef(false);
-    const fromHouseRef = useRef(knockFromHouse);
     const hostKey = hostKeyFromUrl || (ready ? readHostKey(slug) : null);
     const [joinToken, setJoinToken] = useState<string | null>(null);
     const preparedTokenRef = useRef<string | null>(null);
     const { socket, loading, failed } = useSocket(joinToken);
     const joined = door === "joined";
+    const reconnecting = joined && !failed && (loading || !socket);
     const voice = useVoice({
         enabled: joined,
         token: joinToken,
@@ -97,6 +80,32 @@ export function TableRoom({
     voiceRef.current = voice;
     const slugRef = useRef(table?.slug ?? slug);
     slugRef.current = table?.slug ?? slug;
+    const { send } = useTableSocket({
+        socket,
+        loading,
+        session,
+        joinToken,
+        slug,
+        hostKey,
+        knockFromHouse,
+        boardRef,
+        awaitingReplayRef,
+        voiceRef,
+        router,
+        setSession,
+        setDoor,
+        setDoorMessage,
+        setTable,
+        setSnapshot,
+        setRemoteScene,
+        setCursors,
+        setAsks,
+        setPendingAsk,
+        setAskResult,
+        setReactions,
+        setToast,
+        setRecapEvents,
+    });
 
     const canDraw = useMemo(() => {
         if (!session || !table) {
@@ -110,10 +119,27 @@ export function TableRoom({
     );
 
     useEffect(() => {
-        if (hostKeyFromUrl) {
-            rememberHostKey(slug, hostKeyFromUrl);
+        installAudioPrime();
+    }, []);
+
+    useEffect(() => {
+        if (!hostKeyFromUrl) {
+            return;
         }
-    }, [hostKeyFromUrl, slug]);
+        rememberHostKey(slug, hostKeyFromUrl);
+        router.replace(knockFromHouse ? `/room/${slug}?knock=1` : `/room/${slug}`);
+    }, [hostKeyFromUrl, knockFromHouse, slug, router]);
+
+    useEffect(() => {
+        if (door !== "waiting") {
+            setWaitStarted(0);
+            setKnockReadyAt(0);
+            setKnockNote("");
+            return;
+        }
+        setWaitStarted((current) => current || Date.now());
+        setKnockReadyAt((current) => current || Date.now() + KNOCK_COOLDOWN_MS);
+    }, [door]);
 
     useEffect(() => {
         const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -205,336 +231,6 @@ export function TableRoom({
     }, [slug]);
 
     useEffect(() => {
-        if (!socket || loading || !session || !joinToken) {
-            return;
-        }
-
-        const ws = socket;
-        let settled = false;
-        let snapshotSeen = false;
-        let snapshotWatch: number | undefined;
-        setDoor((current) =>
-            current === "joined" || current === "waiting" || current === "need-name"
-                ? current
-                : "connecting"
-        );
-
-        ws.send(
-            JSON.stringify({
-                type: "join",
-                roomId: slug,
-                hostKey: hostKey || undefined,
-                token: joinToken,
-                fromHouse: fromHouseRef.current,
-            })
-        );
-
-        const joinWatch = window.setTimeout(() => {
-            if (!settled) {
-                setDoor((current) =>
-                    current === "connecting" ? "error" : current
-                );
-                setDoorMessage((current) => current || "The table line went quiet.");
-            }
-        }, 10_000);
-
-        const onClose = (event: CloseEvent) => {
-            if (event.code === 4000) {
-                settled = true;
-                setDoor("expired");
-                setDoorMessage((current) => current || "This sitting is over");
-                return;
-            }
-            if (event.code === 1008) {
-                settled = true;
-                clearSession();
-                setSession(null);
-                setDoor("error");
-                setDoorMessage(
-                    "That session was rejected. Head back and sit down again with a fresh name."
-                );
-                return;
-            }
-            if (event.code === 4001) {
-                settled = true;
-                setDoor("error");
-                setDoorMessage("Connected from another tab. This window stepped out.");
-            }
-        };
-
-        ws.addEventListener("close", onClose);
-
-        ws.onmessage = (event) => {
-            let payload: unknown;
-            try {
-                payload = JSON.parse(event.data as string);
-            } catch {
-                return;
-            }
-            if (!payload || typeof payload !== "object" || !("type" in payload)) {
-                return;
-            }
-            const message = payload as Record<string, unknown>;
-            const type = message.type;
-
-            if (type === "hello") {
-                return;
-            }
-            if (type === "auth_error") {
-                settled = true;
-                clearSession();
-                setSession(null);
-                setDoor("error");
-                setDoorMessage(
-                    "That session was rejected. Head back and sit down again with a fresh name."
-                );
-                return;
-            }
-            if (type === "joined") {
-                settled = true;
-                setDoor("joined");
-                snapshotWatch = window.setTimeout(() => {
-                    if (!snapshotSeen) {
-                        setSnapshot({ elements: [], files: {} });
-                    }
-                }, 1500);
-                return;
-            }
-            if (type === "waiting") {
-                settled = true;
-                setDoor("waiting");
-                return;
-            }
-            if (type === "denied") {
-                settled = true;
-                setDoor("denied");
-                return;
-            }
-            if (type === "full") {
-                settled = true;
-                setDoor("full");
-                return;
-            }
-            if (type === "expired") {
-                settled = true;
-                setDoor("expired");
-                setDoorMessage(String(message.message ?? ""));
-                return;
-            }
-            if (type === "missing") {
-                settled = true;
-                setDoor("missing");
-                return;
-            }
-            if (type === "participant_left") {
-                const id = String(message.participantId ?? "");
-                if (id) {
-                    boardRef.current?.dropCursor(id);
-                    setCursors((current) => current.filter((item) => item.id !== id));
-                }
-                return;
-            }
-            if (type === "room_state") {
-                const state = message as unknown as RoomStatePayload;
-                setTable(asTable(state));
-                const living = new Set([
-                    ...(state.seats ?? []).map((seat) => seat.id),
-                    ...(state.waiters ?? []).map((waiter) => waiter.id),
-                ]);
-                setCursors((current) => {
-                    const next = current.filter((cursor) => living.has(cursor.id));
-                    if (next.length !== current.length) {
-                        for (const cursor of current) {
-                            if (!living.has(cursor.id)) {
-                                boardRef.current?.dropCursor(cursor.id);
-                            }
-                        }
-                    }
-                    return next;
-                });
-                if (state.viaFormerSlug === false && state.slug !== slug) {
-                    const next = hostKey
-                        ? `/room/${state.slug}?host=${hostKey}`
-                        : `/room/${state.slug}`;
-                    if (hostKey) {
-                        rememberHostKey(state.slug, hostKey);
-                    }
-                    router.replace(next);
-                }
-                return;
-            }
-            if (type === "slug_rotated") {
-                const nextSlug = String(message.slug ?? "");
-                if (nextSlug) {
-                    if (hostKey) {
-                        rememberHostKey(nextSlug, hostKey);
-                    }
-                    router.replace(hostKey ? `/room/${nextSlug}?host=${hostKey}` : `/room/${nextSlug}`);
-                    setToast("Guest link changed. Old links have to knock.");
-                }
-                return;
-            }
-            if (type === "marker_state" || type === "marker_ack") {
-                const slots = message.slots as [string | null, string | null] | undefined;
-                if (slots) {
-                    setTable((current) => (current ? { ...current, markers: slots } : current));
-                    setAsks((current) =>
-                        current.filter((item) => slots[item.slot] === session.participantId)
-                    );
-                }
-                return;
-            }
-            if (type === "marker_asks") {
-                const incoming = Array.isArray(message.asks) ? message.asks : [];
-                setAsks(
-                    incoming
-                        .map((item) => {
-                            const row = item as Record<string, unknown>;
-                            const parsed: MarkerAsk = {
-                                requestId: String(row.requestId ?? ""),
-                                fromParticipantId: String(row.fromParticipantId ?? ""),
-                                fromName: String(row.fromName ?? "Someone"),
-                                fromAvatar: Number.isFinite(Number(row.fromAvatar))
-                                    ? Number(row.fromAvatar)
-                                    : avatarFromId(String(row.fromParticipantId ?? "")),
-                                slot: row.slot === 1 ? 1 : 0,
-                                expiresAt: String(row.expiresAt ?? ""),
-                            };
-                            return parsed;
-                        })
-                        .filter((item) => item.requestId)
-                );
-                return;
-            }
-            if (type === "marker_ask_state") {
-                const row = message.ask as Record<string, unknown> | null | undefined;
-                setPendingAsk(
-                    row
-                        ? {
-                              requestId: String(row.requestId ?? ""),
-                              slot: row.slot === 1 ? 1 : 0,
-                              holderId: String(row.holderId ?? ""),
-                              holderName: String(row.holderName ?? "someone"),
-                              expiresAt: String(row.expiresAt ?? ""),
-                          }
-                        : null
-                );
-                return;
-            }
-            if (type === "marker_ask_done") {
-                const outcome = String(message.outcome ?? "lapsed") as AskOutcome;
-                setAskResult((current) => ({
-                    slot: message.slot === 1 ? 1 : 0,
-                    outcome,
-                    n: (current?.n ?? 0) + 1,
-                }));
-                return;
-            }
-            if (type === "reaction") {
-                const item: LiveReaction = {
-                    id: String(message.id ?? Math.random()),
-                    participantId: String(message.participantId ?? ""),
-                    emoji: String(message.emoji ?? ""),
-                };
-                setReactions((current) => [...current, item]);
-                window.setTimeout(() => {
-                    setReactions((current) => current.filter((row) => row.id !== item.id));
-                }, REACTION_LIFE_MS);
-                return;
-            }
-            if (type === "canvas_snapshot") {
-                snapshotSeen = true;
-                if (snapshotWatch) {
-                    window.clearTimeout(snapshotWatch);
-                    snapshotWatch = undefined;
-                }
-                setSnapshot(message.payload ?? { elements: [], files: {} });
-                return;
-            }
-            if (type === "canvas") {
-                setRemoteScene(message.payload);
-                return;
-            }
-            if (type === "cursor") {
-                const id = String(message.participantId);
-                if (id === session?.participantId) {
-                    return;
-                }
-                const cursor: RemoteCursor = {
-                    id,
-                    name: String(message.name ?? ""),
-                    x: Number(message.x),
-                    y: Number(message.y),
-                    tool: message.tool === "pointer" ? "pointer" : "laser",
-                    button: message.button === "down" ? "down" : "up",
-                };
-                boardRef.current?.applyCursor(cursor);
-                setCursors((current) => {
-                    const next = current.filter((item) => item.id !== id);
-                    next.push(cursor);
-                    return next.slice(-12);
-                });
-                return;
-            }
-            if (type === "force_mute") {
-                void voiceRef.current.forceMute();
-                send({ type: "set_muted", muted: true });
-                return;
-            }
-            if (type === "replay") {
-                if (!awaitingReplayRef.current) {
-                    return;
-                }
-                awaitingReplayRef.current = false;
-                const incoming = Array.isArray(message.events) ? message.events : [];
-                const frames = incoming.filter((item) => {
-                    if (!item || typeof item !== "object" || !("type" in item)) {
-                        return false;
-                    }
-                    return (item as RecapEvent).type === "canvas";
-                });
-                if (frames.length === 0) {
-                    setToast("Nothing to rewind yet");
-                    return;
-                }
-                setRecapEvents(
-                    incoming.map((item) => {
-                        const row = item as Record<string, unknown>;
-                        const parsed: RecapEvent = {
-                            t: Number(row.t) || 0,
-                            type: String(row.type ?? ""),
-                            payload: row.payload,
-                        };
-                        return parsed;
-                    })
-                );
-                return;
-            }
-            if (type === "error") {
-                const text = String(message.message ?? "Could not sit down");
-                setDoor((current) =>
-                    current === "joined" || current === "waiting" ? current : "error"
-                );
-                setDoorMessage(text);
-                setToast(text);
-            }
-        };
-
-        function send(body: Record<string, unknown>) {
-            ws.send(JSON.stringify(body));
-        }
-
-        return () => {
-            window.clearTimeout(joinWatch);
-            if (snapshotWatch) {
-                window.clearTimeout(snapshotWatch);
-            }
-            ws.removeEventListener("close", onClose);
-            ws.onmessage = null;
-        };
-    }, [socket, loading, session, joinToken, slug, hostKey, router, setSession]);
-
-    useEffect(() => {
         if (!toast) {
             return;
         }
@@ -542,11 +238,8 @@ export function TableRoom({
         return () => window.clearTimeout(timer);
     }, [toast]);
 
-    function send(body: Record<string, unknown>) {
-        socket?.send(JSON.stringify(body));
-    }
-
     async function handleName(name: string) {
+        primeAudio();
         setNamePending(true);
         try {
             const next = await createSession(name);
@@ -583,9 +276,13 @@ export function TableRoom({
         send({ type: "set_muted", muted: !next });
     }
 
-    function copy(label: string, value: string) {
-        void navigator.clipboard.writeText(value);
-        setToast(`${label} copied`);
+    async function copy(label: string, value: string) {
+        try {
+            await navigator.clipboard.writeText(value);
+            setToast(`${label} copied`);
+        } catch {
+            setToast("Could not copy");
+        }
     }
 
     function requestReplay() {
@@ -629,14 +326,60 @@ export function TableRoom({
         );
     }
 
+    if (door === "waiting" && session) {
+        const cool = Math.max(0, knockReadyAt - now);
+        const inside = table ? table.usedSeats : null;
+        const copyForDoor = doorCopy("waiting");
+        return (
+            <>
+                <DoorScreen title={copyForDoor.title} body={doorMessage || copyForDoor.body}>
+                    <p className="door-kicker">
+                        {inside === null
+                            ? "Checking who is inside."
+                            : inside === 1
+                              ? "1 person is inside."
+                              : `${inside} people are inside.`}
+                    </p>
+                    <p className="door-kicker">
+                        Waiting {waitStarted ? waitedLabel(now - waitStarted) : "0s"}.
+                    </p>
+                    {knockNote ? <p className="door-kicker">{knockNote}</p> : null}
+                    <div className="door-actions">
+                        <button
+                            className="btn btn-brass"
+                            disabled={cool > 0}
+                            onClick={() => {
+                                primeAudio();
+                                send({ type: "knock" });
+                                setKnockReadyAt(Date.now() + KNOCK_COOLDOWN_MS);
+                                setKnockNote("Knocked again.");
+                            }}
+                            type="button"
+                        >
+                            {cool > 0 ? `Knock again in ${Math.ceil(cool / 1000)}s` : "Knock again"}
+                        </button>
+                        <Link className="btn btn-ghost" href="/">
+                            Back to the house
+                        </Link>
+                    </div>
+                </DoorScreen>
+                {toast ? (
+                    <p className="toast" role="status">
+                        {toast}
+                    </p>
+                ) : null}
+            </>
+        );
+    }
+
     if (door !== "joined" || !session) {
         const copyForDoor = doorCopy(door === "joined" ? "connecting" : door);
         return (
             <DoorScreen title={copyForDoor.title} body={doorMessage || copyForDoor.body}>
                 {door === "denied" || door === "missing" || door === "expired" || door === "full" || door === "error" ? (
-                    <a className="btn btn-brass" href="/">
+                    <Link className="btn btn-brass" href="/">
                         Back to the house
-                    </a>
+                    </Link>
                 ) : null}
             </DoorScreen>
         );
@@ -663,10 +406,9 @@ export function TableRoom({
                 voiceUnlockNeeded={voice.configured === true && voice.unlockNeeded}
                 micOn={voice.micOn}
                 speakingIds={voice.speakingIds}
+                reconnecting={reconnecting}
                 onScene={(payload) => send({ type: "canvas", payload })}
-                onCursor={(x, y, tool, button) =>
-                    send({ type: "cursor", x, y, tool, button })
-                }
+                onCursor={(x, y, tool, button) => send({ type: "cursor", x, y, tool, button })}
                 onTake={(slot) => send({ type: "take_marker", slot })}
                 onDrop={(slot) => send({ type: "drop_marker", slot })}
                 onGive={(slot, toParticipantId) => send({ type: "give_marker", slot, toParticipantId })}
@@ -696,7 +438,7 @@ export function TableRoom({
                 onReplay={requestReplay}
                 onSaveImage={() => void saveImage()}
                 onSaveBoard={saveBoard}
-                onCopy={copy}
+                onCopy={(label, value) => void copy(label, value)}
                 onCloseRecap={() => setRecapEvents(null)}
                 boardRef={boardRef}
                 recapEvents={recapEvents}

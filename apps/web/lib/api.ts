@@ -17,6 +17,7 @@ export type HouseTable =
           name: string | null;
           hostName: string;
           expiresAt: string;
+          seated: number;
           quietMs?: number;
       };
 
@@ -140,7 +141,9 @@ export async function claimRoom(token: string, slug: string, name: string) {
 
 export async function fetchRoom(slug: string) {
     try {
-        const response = await axios.get<RoomMeta>(`${BACKEND_URL}/rooms/${slug}`);
+        const response = await axios.get<RoomMeta>(
+            `${BACKEND_URL}/rooms/${encodeURIComponent(slug)}`
+        );
         return { ok: true as const, room: response.data };
     } catch (error) {
         if (axios.isAxiosError(error) && error.response?.status === 404) {

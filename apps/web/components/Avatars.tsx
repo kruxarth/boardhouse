@@ -3,6 +3,8 @@
  * sitting shares one.
  */
 
+import Image from "next/image";
+
 export const AVATARS = [
     { name: "Moth", src: "/avatars/moth.png?v=goofy" },
     { name: "Moon", src: "/avatars/moon.png?v=goofy" },
@@ -84,13 +86,14 @@ export function Avatar({ index, id }: { index?: number; id?: string }) {
     const safe = normalizeAvatarIndex(index) ?? (id ? hashId(id) : 0);
     const entry = AVATARS[safe] ?? AVATARS[0];
     return (
-        <img
+        <Image
             alt=""
-            aria-hidden="true"
+            aria-hidden
             className="face"
             draggable={false}
             height={24}
-            src={entry.src}
+            src={entry.src.split("?")[0] ?? entry.src}
+            unoptimized
             width={24}
         />
     );

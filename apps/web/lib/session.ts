@@ -11,10 +11,6 @@ const ID_KEY = "board-house.participantId";
 const NAME_KEY = "board-house.name";
 const SKEW_MS = 5_000;
 
-function readKey(key: string, legacy: string) {
-    return localStorage.getItem(key) ?? localStorage.getItem(legacy);
-}
-
 function decodeJwtPayload(token: string): { exp?: unknown; iat?: unknown } | null {
     const payload = token.split(".")[1];
     if (!payload) {
@@ -51,9 +47,9 @@ export function readSession(): Session | null {
     if (typeof window === "undefined") {
         return null;
     }
-    const token = readKey(TOKEN_KEY, "boardhouse.token");
-    const participantId = readKey(ID_KEY, "boardhouse.participantId");
-    const name = readKey(NAME_KEY, "boardhouse.name");
+    const token = localStorage.getItem(TOKEN_KEY);
+    const participantId = localStorage.getItem(ID_KEY);
+    const name = localStorage.getItem(NAME_KEY);
     if (!token || !participantId || !name) {
         return null;
     }
@@ -74,14 +70,7 @@ export function clearSession() {
     if (typeof window === "undefined") {
         return;
     }
-    for (const key of [
-        TOKEN_KEY,
-        ID_KEY,
-        NAME_KEY,
-        "boardhouse.token",
-        "boardhouse.participantId",
-        "boardhouse.name",
-    ]) {
+    for (const key of [TOKEN_KEY, ID_KEY, NAME_KEY]) {
         localStorage.removeItem(key);
     }
 }
@@ -95,8 +84,5 @@ export function rememberHostKey(slug: string, hostKey: string) {
 }
 
 export function readHostKey(slug: string) {
-    return (
-        sessionStorage.getItem(hostStorageKey(slug)) ??
-        sessionStorage.getItem(`boardhouse.hostKey.${slug}`)
-    );
+    return sessionStorage.getItem(hostStorageKey(slug));
 }

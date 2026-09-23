@@ -18,7 +18,13 @@ export const ASK_WINDOW_MS = 9_000;
 export const HOLDER_IDLE_MS = 45_000;
 /** Breathing room after a refused or lapsed ask before the same slot can be asked again. */
 export const ASK_COOLDOWN_MS = 8_000;
+/** Keep a disconnected seat's markers so a refresh can pick them back up. */
+export const MARKER_GRACE_MS = 30_000;
+/** How long a guest must wait before knocking again. */
+export const KNOCK_COOLDOWN_MS = 12_000;
 export const REACTION_MIN_GAP_MS = 800;
+/** How often one seat may ask for the sitting replay. */
+export const REPLAY_MIN_GAP_MS = 5_000;
 /** One per seat, handed out so no two people at a table share a face. */
 export const AVATAR_COUNT = MAX_SEATS;
 export const REACTIONS = ["👍", "🔥", "😂", "🎉", "👀", "❤️"] as const;

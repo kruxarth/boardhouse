@@ -1,22 +1,19 @@
 import cors from "cors";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import { JWT_SECRET } from "@repo/backend-common/config";
+import { livekitConfigured, mintLivekitToken } from "@repo/backend-common/livekit";
 import { MAX_ROOMS, SESSION_TTL_SECONDS } from "@repo/common/constants";
 import { ClaimRoomSchema, CreateRoomSchema, CreateSessionSchema } from "@repo/common/types";
-import { prismaClient } from "@repo/db";
 import { middleware } from "./middleware";
-import { livekitConfigured, mintLivekitToken } from "./livekit";
 import {
-    assertHouseHasATable,
     claimUnusedRoom,
     findRoomBySlug,
     houseOccupancy,
     listHouseTables,
-    makeGuestSlug,
-    makeHostKey,
-    roomExpiryDate,
+    openHouseTable,
     wipeExpiredRooms,
 } from "./rooms";
 
@@ -43,16 +40,49 @@ function isAllowedOrigin(origin: string | undefined) {
     }
     try {
         const host = new URL(origin).hostname;
-        return (
-            host === "board-house.vercel.app" ||
-            (host.startsWith("board-house-") && host.endsWith(".vercel.app"))
-        );
+        return host === "board-house.vercel.app" || isTeamPreview(host);
     } catch {
         return false;
     }
 }
 
+function isTeamPreview(hostname: string) {
+    const team = (process.env.VERCEL_TEAM_SLUG ?? "").trim().toLowerCase();
+    if (!team || !/^[a-z0-9-]+$/.test(team)) {
+        return false;
+    }
+    const suffix = `-${team}.vercel.app`;
+    if (!hostname.endsWith(suffix) || !hostname.startsWith("board-house-")) {
+        return false;
+    }
+    const middle = hostname.slice("board-house-".length, hostname.length - suffix.length);
+    return middle.length > 0;
+}
+
+function routeSlug(value: string | string[] | undefined) {
+    return typeof value === "string" ? value : "";
+}
+
+const sessionLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many requests" },
+});
+
+const roomLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { message: "Too many requests" },
+});
+
 const app = express();
+if (process.env.NODE_ENV === "production") {
+    app.set("trust proxy", 1);
+}
 app.use(
     cors({
         origin(origin, callback) {
@@ -83,7 +113,7 @@ function issueSession(participantId: string, name: string) {
     return { token, participantId, name };
 }
 
-app.post("/session", async (req, res) => {
+app.post("/session", sessionLimiter, async (req, res) => {
     const parsed = CreateSessionSchema.safeParse(req.body);
     if (!parsed.success) {
         return res.status(400).json({ message: "Name must be 2–24 characters" });
@@ -110,7 +140,7 @@ app.get("/occupancy", async (_req, res) => {
     }
 });
 
-app.post("/rooms", middleware, async (req, res) => {
+app.post("/rooms", roomLimiter, middleware, async (req, res) => {
     if (!req.participantId) {
         return res.status(401).json({ message: "Unauthorized" });
     }
@@ -121,31 +151,19 @@ app.post("/rooms", middleware, async (req, res) => {
     }
 
     try {
-        const house = await assertHouseHasATable();
-        if (!house.ok) {
+        const opened = await openHouseTable({
+            participantId: req.participantId,
+            hostName: req.participantName ?? "",
+            name: parsed.data.name,
+        });
+        if (!opened.ok) {
             return res.status(503).json({
                 message: "House is full",
-                occupancy: { used: house.used, max: MAX_ROOMS },
+                occupancy: { used: opened.used, max: MAX_ROOMS },
             });
         }
 
-        const slug = makeGuestSlug(parsed.data.name);
-        const hostKey = makeHostKey();
-        const expiresAt = roomExpiryDate();
-
-        const room = await prismaClient.room.create({
-            data: {
-                slug,
-                hostKey,
-                hostParticipantId: req.participantId,
-                hostName: req.participantName ?? "",
-                accessMode: "knock",
-                name: parsed.data.name,
-                expiresAt,
-                emptySince: new Date(),
-            },
-        });
-
+        const room = opened.room;
         return res.status(201).json({
             slug: room.slug,
             hostKey: room.hostKey,
@@ -154,7 +172,7 @@ app.post("/rooms", middleware, async (req, res) => {
             expiresAt: room.expiresAt.toISOString(),
             guestPath: `/room/${room.slug}`,
             hostPath: `/room/${room.slug}?host=${room.hostKey}`,
-            occupancy: { used: house.used + 1, max: MAX_ROOMS },
+            occupancy: { used: opened.used + 1, max: MAX_ROOMS },
         });
     } catch (error) {
         console.error("Error creating room:", error);
@@ -162,12 +180,12 @@ app.post("/rooms", middleware, async (req, res) => {
     }
 });
 
-app.post("/rooms/:slug/claim", middleware, async (req, res) => {
+app.post("/rooms/:slug/claim", roomLimiter, middleware, async (req, res) => {
     if (!req.participantId) {
         return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const slug = req.params.slug;
+    const slug = routeSlug(req.params.slug);
     if (!slug) {
         return res.status(400).json({ message: "Missing slug" });
     }
@@ -217,13 +235,12 @@ app.post("/rooms/:slug/claim", middleware, async (req, res) => {
 });
 
 app.get("/rooms/:slug", async (req, res) => {
-    const slug = req.params.slug;
+    const slug = routeSlug(req.params.slug);
     if (!slug) {
         return res.status(400).json({ message: "Missing slug" });
     }
 
     try {
-        await wipeExpiredRooms();
         const room = await findRoomBySlug(slug);
         if (!room) {
             return res.status(404).json({ message: "No table at this door" });

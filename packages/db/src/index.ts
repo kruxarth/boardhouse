@@ -1,7 +1,7 @@
 import "./env";
 import pg from "pg";
 import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "../generated/prisma/client.js";
+import { Prisma, PrismaClient } from "../generated/prisma/client.js";
 
 if (!process.env.DATABASE_URL) {
     console.error("DATABASE_URL is not set");
@@ -16,3 +16,4 @@ const pool = new pg.Pool({
 const adapter = new PrismaPg(pool);
 
 export const prismaClient = new PrismaClient({ adapter });
+export { Prisma };

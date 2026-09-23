@@ -18,7 +18,7 @@ Two markers. The host starts with Marker one. Marker two sits on the table. A fr
 
 Voice is in the tab. Click the mic on, click it off. The host can mute someone; only that person can unmute themselves.
 
-Anyone at the table can export a replay of the board. At twenty-four hours the sitting is gone, unless the host wiped it sooner.
+Anyone at the table can rewind the board inside the sitting. At twenty-four hours the sitting is gone, unless the host wiped it sooner.
 
 ## The house
 
@@ -26,20 +26,20 @@ Anyone at the table can export a replay of the board. At twenty-four hours the s
 | --- | --- |
 | 10 tables | The house is full when they are all taken. |
 | 10 people at a table | A discussion. |
-| No spectators | If you are in, you can talk, export, and try for a marker. |
+| No spectators | If you are in, you can talk, rewind, and try for a marker. |
 | No accounts | A display name and a link. |
 | Knock, or an open link | The host chooses the door. |
 | Two markers | Pair on the board. Everyone else points. |
 | Mic toggle | Host may mute. You unmute yourself. |
 | 24 hours | Then the table is empty again. |
-| Export | Anyone inside can take the replay with them. |
+| Replay | Anyone inside can rewind the sitting in the app. |
 
 ## Repo
 
 - `apps/web` — Next.js client
 - `apps/http-backend` — HTTP API
 - `apps/ws-backend` — live room events (not audio)
-- `packages/db` — Neon/Postgres for room metadata, not strokes
+- `packages/db` — Neon/Postgres for room metadata and the latest board
 
 ## Run it
 

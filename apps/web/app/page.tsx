@@ -8,6 +8,7 @@ import { HouseWindow } from "../components/HouseWindow";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
+import { installAudioPrime, primeAudio } from "../lib/sounds";
 
 export default function Home() {
     const router = useRouter();
@@ -19,6 +20,10 @@ export default function Home() {
     const [pending, setPending] = useState(false);
     const [claiming, setClaiming] = useState(false);
     const [claimingSlug, setClaimingSlug] = useState<string | null>(null);
+
+    useEffect(() => {
+        installAudioPrime();
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -49,6 +54,7 @@ export default function Home() {
     const houseFull = occupancy !== null && occupancy.used >= occupancy.max && !unusedOpen;
 
     async function openTable(payload: { name?: string; tableName: string }) {
+        primeAudio();
         const sittingName = payload.tableName.trim();
         if (!sittingName) {
             setError("Name this sitting");
@@ -89,6 +95,7 @@ export default function Home() {
     }
 
     function beginClaim(slug?: string) {
+        primeAudio();
         if (pending) {
             return;
         }
@@ -112,6 +119,7 @@ export default function Home() {
 
     function openLink(event: React.FormEvent) {
         event.preventDefault();
+        primeAudio();
         const trimmed = link.trim();
         if (!trimmed) {
             return;
@@ -208,6 +216,9 @@ export default function Home() {
                             <div className="frontdoor">
                                 <div className="frontdoor-arch">
                                     <span className="knob" aria-hidden="true" />
+                                    <p className="frontdoor-oneliner">
+                                        Ten seats. Two markers. The board is wiped after a day.
+                                    </p>
                                     {ready && claiming ? (
                                         <>
                                             <ClaimTable
@@ -247,7 +258,7 @@ export default function Home() {
                                             {ready && !houseFull ? (
                                                 <p className="frontdoor-hint">
                                                     {unusedOpen
-                                                        ? "A dim window has been quiet for ten minutes. Claim it and the old board is wiped."
+                                                        ? "A dim window has been quiet. Claiming it wipes the previous host's board."
                                                         : session
                                                           ? "Pick a dark window and name the table."
                                                           : "No key? Pick a dark window and sit down."}

@@ -64,6 +64,7 @@ export function useVoice(options: {
             element.style.display = "none";
             document.body.appendChild(element);
             audioElements.set(track, element);
+            refreshUnlock();
         }
 
         function detachAudio(track: RemoteTrack) {
@@ -77,11 +78,32 @@ export function useVoice(options: {
             setMicOn(false);
         }
 
-        function handlePlayback() {
-            if (dismissedRef.current || room.canPlaybackAudio) {
+        function hasCompany() {
+            if (room.remoteParticipants.size > 0) {
+                return true;
+            }
+            for (const participant of room.remoteParticipants.values()) {
+                for (const publication of participant.audioTrackPublications.values()) {
+                    if (publication.isSubscribed || publication.track) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        function refreshUnlock() {
+            if (!hasCompany()) {
+                setUnlockNeeded(false);
                 return;
             }
-            setUnlockNeeded(true);
+            if (!dismissedRef.current) {
+                setUnlockNeeded(true);
+            }
+        }
+
+        function handlePlayback() {
+            refreshUnlock();
         }
 
         room.on(RoomEvent.TrackSubscribed, attachAudio);
@@ -89,6 +111,8 @@ export function useVoice(options: {
         room.on(RoomEvent.Disconnected, handleDisconnected);
         room.on(RoomEvent.ActiveSpeakersChanged, publishSpeaking);
         room.on(RoomEvent.AudioPlaybackStatusChanged, handlePlayback);
+        room.on(RoomEvent.ParticipantConnected, refreshUnlock);
+        room.on(RoomEvent.ParticipantDisconnected, refreshUnlock);
 
         (async () => {
             try {
@@ -105,7 +129,7 @@ export function useVoice(options: {
                 await room.connect(minted.url, minted.token);
                 await room.localParticipant.setMicrophoneEnabled(false);
                 setMicOn(false);
-                setUnlockNeeded(true);
+                refreshUnlock();
                 publishSpeaking();
             } catch (err) {
                 console.error(err);
@@ -124,6 +148,8 @@ export function useVoice(options: {
             room.off(RoomEvent.Disconnected, handleDisconnected);
             room.off(RoomEvent.ActiveSpeakersChanged, publishSpeaking);
             room.off(RoomEvent.AudioPlaybackStatusChanged, handlePlayback);
+            room.off(RoomEvent.ParticipantConnected, refreshUnlock);
+            room.off(RoomEvent.ParticipantDisconnected, refreshUnlock);
             for (const element of audioElements.values()) {
                 element.remove();
             }

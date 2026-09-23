@@ -3,20 +3,24 @@
   "version": "1.0.0",
   "main": "index.js",
   "exports": {
-    "./config": "./src/index.ts"
+    "./config": "./src/index.ts",
+    "./env": "./src/env.ts",
+    "./livekit": "./src/livekit.ts"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "check-types": "tsc --noEmit"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "dotenv": "^17.4.2"
+    "jsonwebtoken": "^9.0.3",
+    "livekit-server-sdk": "^2.15.0"
   },
   "devDependencies": {
     "@repo/typescript-config": "workspace:*",
+    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.15.3"
   }
 }

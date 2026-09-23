@@ -4,11 +4,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } fro
 import type { PresencePerson } from "@repo/common/types";
 import { ASK_WINDOW_MS, REACTIONS } from "@repo/common/constants";
 import { BoardCanvas, MARKER_INK, type BoardHandle, type RemoteCursor } from "./BoardCanvas";
+import { InviteCard } from "./InviteCard";
+import { installAudioPrime, playMarkerChime } from "../lib/sounds";
 import { Avatar } from "./Avatars";
 import {
     AskIcon,
     CloseIcon,
-    DoorIcon,
     DownloadIcon,
     DrawerIcon,
     FileIcon,
@@ -105,6 +106,46 @@ function fuseLeft(expiresAt: string, tick: number) {
     return Math.max(0, Math.min(1, ms / ASK_WINDOW_MS));
 }
 
+function fuseLate(expiresAt: string, tick: number) {
+    const ms = new Date(expiresAt).getTime() - (tick || Date.now());
+    return ms > 0 && ms <= 3_000;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const TEN_MIN_MS = 10 * 60 * 1000;
+
+function watchCopy(table: TableModel, byId: Map<string, PresencePerson>) {
+    const pinkId = table.markers[0];
+    const blackId = table.markers[1];
+    const pink = pinkId ? (byId.get(pinkId) ?? null) : null;
+    const blackFree = !blackId;
+    const pinkFree = !pinkId;
+    if (pinkFree && blackFree) {
+        return { text: "Watching · a marker is free", action: "Pick it up", slot: 0 as const, kind: "take" as const };
+    }
+    if (pinkFree) {
+        return { text: "Watching · the pink marker is free", action: "Pick it up", slot: 0 as const, kind: "take" as const };
+    }
+    if (blackFree) {
+        return { text: "Watching · the black marker is free", action: "Pick it up", slot: 1 as const, kind: "take" as const };
+    }
+    if (pinkId && !pink) {
+        return {
+            text: "Watching · the pink marker is reconnecting",
+            action: null,
+            slot: 0 as const,
+            kind: "wait" as const,
+        };
+    }
+    const name = pink?.name ?? "them";
+    return {
+        text: `Watching · ask ${name} for the pink marker`,
+        action: `Ask ${name}`,
+        slot: 0 as const,
+        kind: "ask" as const,
+    };
+}
+
 export function TableShell({
     me,
     hostKey,
@@ -123,6 +164,7 @@ export function TableShell({
     voiceUnlockNeeded,
     micOn,
     speakingIds,
+    reconnecting,
     onScene,
     onCursor,
     onTake,
@@ -169,6 +211,7 @@ export function TableShell({
     voiceUnlockNeeded: boolean;
     micOn: boolean;
     speakingIds: string[];
+    reconnecting: boolean;
     onScene: (payload: unknown) => void;
     onCursor: (x: number, y: number, tool: "pointer" | "laser", button: "up" | "down") => void;
     onTake: (slot: 0 | 1) => void;
@@ -213,7 +256,7 @@ export function TableShell({
         return () => window.clearTimeout(timer);
     }, [askResult]);
 
-    const seats = table?.seats ?? [];
+    const seats = useMemo(() => table?.seats ?? [], [table]);
     // Your own row stays first so the mic toggle never moves as people come and go.
     const ordered = useMemo(() => {
         const mine = seats.filter((seat) => seat.id === me.id);
@@ -229,9 +272,127 @@ export function TableShell({
         return map;
     }, [seats]);
 
+    const [menuTick, setMenuTick] = useState<[number, number]>([0, 0]);
+    const [receivedSlot, setReceivedSlot] = useState<0 | 1 | null>(null);
+    const [selfDrawing, setSelfDrawing] = useState(false);
+    const [hintDismissed, setHintDismissed] = useState(false);
+    const [hintFlash, setHintFlash] = useState(0);
+    const [expiryBanner, setExpiryBanner] = useState<null | "hour" | "ten">(null);
+    const warnedHour = useRef(false);
+    const warnedTen = useRef(false);
+    const prevMarkers = useRef<string | null>(null);
+    const markerKey = table ? `${table.markers[0] ?? ""}\n${table.markers[1] ?? ""}` : "";
+
+    useEffect(() => {
+        installAudioPrime();
+    }, []);
+
+    useEffect(() => {
+        if (!canDraw) {
+            return;
+        }
+        setHintDismissed(false);
+        setHintFlash(0);
+        setSelfDrawing(false);
+    }, [canDraw]);
+
+    useEffect(() => {
+        if (hintFlash === 0) {
+            return;
+        }
+        const timer = window.setTimeout(() => setHintFlash(0), 3_200);
+        return () => window.clearTimeout(timer);
+    }, [hintFlash]);
+
+    useEffect(() => {
+        const name = table?.name?.trim() || "Untitled sitting";
+        const knocks = isHost ? (table?.waiters.length ?? 0) : 0;
+        document.title = knocks > 0 ? `(${knocks}) knocking · ${name}` : `${name} · board-house`;
+        return () => {
+            document.title = "board-house";
+        };
+    }, [isHost, table?.name, table?.waiters.length]);
+
+    useEffect(() => {
+        if (!table) {
+            return;
+        }
+        const left = new Date(table.expiresAt).getTime() - now;
+        if (left <= 0) {
+            return;
+        }
+        if (left <= TEN_MIN_MS) {
+            if (!warnedTen.current) {
+                warnedTen.current = true;
+                setExpiryBanner("ten");
+            }
+            return;
+        }
+        if (left <= HOUR_MS && !warnedHour.current) {
+            warnedHour.current = true;
+            setExpiryBanner("hour");
+        }
+    }, [now, table]);
+
+    const markersRef = useRef(table?.markers);
+    markersRef.current = table?.markers;
+
+    useEffect(() => {
+        const previous = prevMarkers.current;
+        prevMarkers.current = markerKey;
+        const markers = markersRef.current;
+        if (!markers || previous === null) {
+            return;
+        }
+        const [wasPink, wasBlack] = previous.split("\n");
+        const before: [string, string] = [wasPink ?? "", wasBlack ?? ""];
+        const passed = ([0, 1] as const).find((slot) => {
+            const nowId = markers[slot] ?? "";
+            return nowId === me.id && before[slot] !== "" && before[slot] !== me.id;
+        });
+        if (passed === undefined) {
+            return;
+        }
+        playMarkerChime();
+        setReceivedSlot(passed);
+        const timer = window.setTimeout(() => setReceivedSlot(null), 900);
+        return () => window.clearTimeout(timer);
+    }, [markerKey, me.id]);
+
+    function openPen(slot: 0 | 1) {
+        setMenuTick((current) => {
+            const next: [number, number] = [current[0], current[1]];
+            next[slot] += 1;
+            return next;
+        });
+    }
+
+    function nudgeWatchHint() {
+        if (!hintDismissed) {
+            return;
+        }
+        setHintFlash((count) => count + 1);
+    }
+
     if (door !== "joined" || !table) {
         return null;
     }
+
+    const watching = !canDraw ? watchCopy(table, byId) : null;
+    const showWatchHint = Boolean(watching && (!hintDismissed || hintFlash > 0));
+    const alone = isHost && seats.length <= 1;
+    const graceNames = ([0, 1] as const)
+        .filter((slot) => {
+            const id = table.markers[slot];
+            return Boolean(id && !byId.has(id));
+        })
+        .map((slot) => (slot === 0 ? "Pink marker" : "Black marker"));
+    const expiryCopy =
+        expiryBanner === "ten"
+            ? "10 minutes left on this table."
+            : expiryBanner === "hour"
+              ? "1 hour left on this table."
+              : null;
 
     return (
         <div className={drawerOpen ? "table-shell drawer-open" : "table-shell"}>
@@ -242,10 +403,24 @@ export function TableShell({
                         <p className="rail-meta">
                             {table.usedSeats} / {table.maxSeats} seats
                             <span className="fuse">{remainingLabel(table.expiresAt, now)}</span>
+                            {reconnecting ? <span className="rail-reconnect">Reconnecting</span> : null}
                         </p>
                     </div>
                     <ul className="seats">
-                        {ordered.map((seat) => (
+                        {ordered.map((seat) => {
+                            const holdsMarker =
+                                table.markers[0] === seat.id || table.markers[1] === seat.id;
+                            const drawing =
+                                holdsMarker &&
+                                (seat.id === me.id
+                                    ? selfDrawing
+                                    : cursors.some(
+                                          (cursor) =>
+                                              cursor.id === seat.id &&
+                                              cursor.button === "down" &&
+                                              cursor.tool !== "laser"
+                                      ));
+                            return (
                             <SeatChip
                                 key={seat.id}
                                 seat={seat}
@@ -253,29 +428,36 @@ export function TableShell({
                                 isTheHost={seat.id === table.hostParticipantId}
                                 iAmHost={isHost}
                                 speaking={speakingIds.includes(seat.id) && !seat.muted}
+                                drawing={drawing}
                                 micOn={micOn}
                                 voiceConfigured={voiceConfigured}
                                 reactions={reactions.filter((item) => item.participantId === seat.id)}
                                 onMic={onMic}
                                 onMute={onMute}
                             />
-                        ))}
+                            );
+                        })}
                     </ul>
                 </div>
 
                 <div className="rail-right">
                     <div className="pens" aria-label="Markers">
-                        {([0, 1] as const).map((slot) => (
+                        {([0, 1] as const).map((slot) => {
+                            const heldById = table.markers[slot];
+                            return (
                             <Pen
                                 key={slot}
                                 slot={slot}
                                 meId={me.id}
-                                holder={byId.get(table.markers[slot] ?? "") ?? null}
+                                heldById={heldById}
+                                holder={heldById ? (byId.get(heldById) ?? null) : null}
                                 seats={seats}
                                 isHost={isHost}
                                 incoming={asks.filter((ask) => ask.slot === slot)}
                                 pending={pendingAsk?.slot === slot ? pendingAsk : null}
                                 note={note?.slot === slot ? note.text : null}
+                                openTick={menuTick[slot]}
+                                received={receivedSlot === slot}
                                 onTake={onTake}
                                 onDrop={onDrop}
                                 onGive={onGive}
@@ -285,7 +467,8 @@ export function TableShell({
                                 onHostTake={onHostTake}
                                 onHostGive={onHostGive}
                             />
-                        ))}
+                            );
+                        })}
                     </div>
 
                     <ReactionBar onReact={onReact} />
@@ -344,6 +527,19 @@ export function TableShell({
                         </aside>
                     </div>
                 ) : null}
+                {expiryCopy ? (
+                    <div className="expiry-banner" role="status">
+                        <p>
+                            {expiryCopy} Save the board if you want to keep it.
+                        </p>
+                        <button className="btn btn-brass" onClick={onSaveBoard} type="button">
+                            Save board
+                        </button>
+                        <button className="btn btn-ghost" onClick={() => setExpiryBanner(null)} type="button">
+                            Dismiss
+                        </button>
+                    </div>
+                ) : null}
                 <BoardCanvas
                     ref={boardRef}
                     canDraw={canDraw}
@@ -354,9 +550,56 @@ export function TableShell({
                     snapshot={snapshot}
                     remoteScene={remoteScene}
                     cursors={cursors}
+                    onDeniedDraw={nudgeWatchHint}
+                    onDrawing={(drawing) => {
+                        setSelfDrawing((current) => (current === drawing ? current : drawing));
+                    }}
                     onScene={onScene}
                     onCursor={onCursor}
                 />
+                {alone ? (
+                    <InviteCard url={guestUrl} onCopy={() => onCopy("Invite link", guestUrl)} />
+                ) : null}
+                {showWatchHint && watching ? (
+                    <div className="watch-hint" role="status">
+                        <p>{watching.text}</p>
+                        {watching.action ? (
+                            <button
+                                className="btn btn-brass btn-tiny"
+                                onClick={() => {
+                                    if (watching.kind === "take") {
+                                        onTake(watching.slot);
+                                        return;
+                                    }
+                                    openPen(watching.slot);
+                                }}
+                                type="button"
+                            >
+                                {watching.action}
+                            </button>
+                        ) : null}
+                        <button
+                            className="btn btn-ghost btn-tiny"
+                            onClick={() => {
+                                setHintDismissed(true);
+                                setHintFlash(0);
+                            }}
+                            type="button"
+                        >
+                            Hide
+                        </button>
+                    </div>
+                ) : null}
+                {!reconnecting && graceNames.length > 0 ? (
+                    <p className="grace-banner" role="status">
+                        Reconnecting… {graceNames.join(" and ")} {graceNames.length === 1 ? "is" : "are"} still held.
+                    </p>
+                ) : null}
+                {reconnecting ? (
+                    <div className="reconnect-overlay" role="status">
+                        Reconnecting…
+                    </div>
+                ) : null}
                 {recapEvents ? (
                     <SittingRecap events={recapEvents} onClose={onCloseRecap} />
                 ) : null}
@@ -376,31 +619,48 @@ export function TableShell({
                     <PlayIcon />
                     Replay
                 </button>
-                <button className="drawer-item" onClick={() => onCopy("Guest link", guestUrl)} type="button">
+                <button className="drawer-item" onClick={() => onCopy("Invite link", guestUrl)} type="button">
                     <LinkIcon />
-                    Copy guest door
+                    Copy invite link
                 </button>
                 {isHost && hostUrl ? (
                     <button className="drawer-item" onClick={() => onCopy("Host link", hostUrl)} type="button">
                         <KeyIcon />
-                        Copy host door
+                        Copy host link (keep private)
                     </button>
                 ) : null}
                 {isHost ? (
                     <>
-                        <button
-                            className="drawer-item"
-                            onClick={() => onMode(table.accessMode === "knock" ? "open" : "knock")}
-                            title={
-                                table.accessMode === "knock"
-                                    ? "Guest links sit down. People who knock from the house still wait."
-                                    : "The house floor can walk in without knocking."
-                            }
-                            type="button"
-                        >
-                            <DoorIcon />
-                            {table.accessMode === "knock" ? "Open house" : "House knocks"}
-                        </button>
+                        <div className="mode-switch">
+                            <p className="mode-switch-label" id="house-mode-label">
+                                From the house
+                            </p>
+                            <div aria-labelledby="house-mode-label" className="mode-switch-options" role="radiogroup">
+                                <button
+                                    aria-checked={table.accessMode === "open"}
+                                    className="mode-option"
+                                    onClick={() => onMode("open")}
+                                    role="radio"
+                                    type="button"
+                                >
+                                    Walk in
+                                </button>
+                                <button
+                                    aria-checked={table.accessMode === "knock"}
+                                    className="mode-option"
+                                    onClick={() => onMode("knock")}
+                                    role="radio"
+                                    type="button"
+                                >
+                                    Knock first
+                                </button>
+                            </div>
+                            <p className="mode-help">
+                                {table.accessMode === "open"
+                                    ? "People from the house can sit down."
+                                    : "People from the house wait at the door."}
+                            </p>
+                        </div>
                         <button
                             className="drawer-item"
                             onClick={onRotate}
@@ -451,6 +711,7 @@ function SeatChip({
     isTheHost,
     iAmHost,
     speaking,
+    drawing,
     micOn,
     voiceConfigured,
     reactions,
@@ -462,6 +723,7 @@ function SeatChip({
     isTheHost: boolean;
     iAmHost: boolean;
     speaking: boolean;
+    drawing: boolean;
     micOn: boolean;
     voiceConfigured: boolean | null;
     reactions: LiveReaction[];
@@ -479,6 +741,7 @@ function SeatChip({
             <span className="seat-name">
                 {seat.name}
                 {isTheHost ? <em className="seat-host">host</em> : null}
+                {drawing ? <em className="seat-drawing">drawing</em> : null}
             </span>
             {isMe ? (
                 <button
@@ -589,12 +852,15 @@ function ReactionBar({ onReact }: { onReact: (emoji: string) => void }) {
 function Pen({
     slot,
     meId,
+    heldById,
     holder,
     seats,
     isHost,
     incoming,
     pending,
     note,
+    openTick,
+    received,
     onTake,
     onDrop,
     onGive,
@@ -606,12 +872,15 @@ function Pen({
 }: {
     slot: 0 | 1;
     meId: string;
+    heldById: string | null;
     holder: PresencePerson | null;
     seats: PresencePerson[];
     isHost: boolean;
     incoming: MarkerAsk[];
     pending: PendingAsk | null;
     note: string | null;
+    openTick: number;
+    received: boolean;
     onTake: (slot: 0 | 1) => void;
     onDrop: (slot: 0 | 1) => void;
     onGive: (slot: 0 | 1, toParticipantId: string) => void;
@@ -627,8 +896,9 @@ function Pen({
     const closeTimer = useRef<number | undefined>(undefined);
     const touched = useRef(false);
 
+    const reconnectingHold = Boolean(heldById) && holder === null;
     const mine = holder?.id === meId;
-    const free = holder === null;
+    const free = !heldById;
     const label = MARKER_NAMES[slot];
     const others = seats.filter((seat) => seat.id !== meId);
     const hostGiveTo = isHost && !mine ? others.filter((seat) => seat.id !== holder?.id) : [];
@@ -647,6 +917,12 @@ function Pen({
     }, [clearTimers]);
 
     useEffect(() => () => clearTimers(), [clearTimers]);
+
+    useEffect(() => {
+        if (openTick > 0) {
+            setOpen(true);
+        }
+    }, [openTick]);
 
     useEffect(() => {
         if (asked) {
@@ -683,15 +959,18 @@ function Pen({
 
     const status = free
         ? "free"
-        : mine
-          ? "yours"
-          : pending
-            ? `asking ${holder?.name ?? "someone"}`
-            : (holder?.name ?? "someone");
+        : reconnectingHold
+          ? "reconnecting"
+          : mine
+            ? "yours"
+            : pending
+              ? `asking ${holder?.name ?? "someone"}`
+              : (holder?.name ?? "someone");
+    const pendingLate = pending ? fuseLate(pending.expiresAt, tick) : false;
 
     return (
         <div
-            className={`pen${mine ? " pen-mine" : ""}${free ? " pen-free" : ""}${asked ? " pen-asked" : ""}`}
+            className={`pen${mine ? " pen-mine" : ""}${free ? " pen-free" : ""}${reconnectingHold ? " pen-away" : ""}${asked ? " pen-asked" : ""}${received ? " pen-received" : ""}`}
             onPointerEnter={(event) => {
                 if (event.pointerType !== "mouse" || asked) {
                     return;
@@ -725,11 +1004,17 @@ function Pen({
                     <InkStroke ink={MARKER_INK[slot]} />
                 </span>
                 <span className="pen-holder">
-                    {holder ? <Avatar id={holder.id} index={holder.avatar} /> : <span className="pen-empty" />}
+                    {holder ? (
+                        <Avatar id={holder.id} index={holder.avatar} />
+                    ) : reconnectingHold ? (
+                        <span className="pen-away-mark">…</span>
+                    ) : (
+                        <span className="pen-empty" />
+                    )}
                 </span>
                 {pending ? (
                     <span
-                        className="pen-fuse"
+                        className={pendingLate ? "pen-fuse pen-fuse-late" : "pen-fuse"}
                         style={{ ["--left" as string]: fuseLeft(pending.expiresAt, tick) }}
                     />
                 ) : null}
@@ -765,7 +1050,11 @@ function Pen({
                                 Keep
                             </button>
                             <span
-                                className="pen-ask-fuse"
+                                className={
+                                    fuseLate(ask.expiresAt, tick)
+                                        ? "pen-ask-fuse pen-fuse-late"
+                                        : "pen-ask-fuse"
+                                }
                                 style={{ ["--left" as string]: fuseLeft(ask.expiresAt, tick) }}
                             />
                         </div>
@@ -776,6 +1065,7 @@ function Pen({
             {open ? (
                 <div className="pen-menu" role="menu">
                     <p className="pen-menu-head">{label}</p>
+                    {reconnectingHold ? <p className="pen-menu-kicker">Reconnecting…</p> : null}
 
                     {free ? (
                         <button className="pen-item" onClick={() => act(() => onTake(slot))} role="menuitem" type="button">
@@ -809,7 +1099,7 @@ function Pen({
                         </>
                     ) : null}
 
-                    {!free && !mine ? (
+                    {!free && !mine && (pending || !reconnectingHold) ? (
                         pending ? (
                             <button className="pen-item" onClick={() => act(onCancelAsk)} role="menuitem" type="button">
                                 <CloseIcon />

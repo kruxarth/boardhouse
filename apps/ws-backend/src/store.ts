@@ -6,6 +6,7 @@ import {
     ASK_WINDOW_MS,
     AVATAR_COUNT,
     HOLDER_IDLE_MS,
+    MARKER_GRACE_MS,
     MAX_REPLAY_BYTES,
     MAX_REPLAY_EVENTS,
     MIN_REPLAY_CANVAS_GAP_MS,
@@ -22,6 +23,9 @@ export type Seat = {
     /** Last stroke or cursor move, used to decide whether a holder has wandered off. */
     activeAt: number;
     reactedAt: number;
+    replayedAt: number;
+    /** Last time this waiting seat knocked, so the door cannot be hammered. */
+    lastKnockAt: number;
 };
 
 export type MarkerAsk = {
@@ -52,9 +56,15 @@ export type LiveRoom = {
     askCooldowns: Map<string, number>;
     avatarOrder: number[];
     avatars: Map<string, number>;
-    canvas: unknown;
+    canvas: CanvasScene;
+    /** Set when the in-memory scene changes and still needs a database write. */
+    canvasDirty: boolean;
     replay: ReplayEvent[];
     replayBytes: number;
+    /** Disconnects that still own a marker until the grace timer fires. */
+    markerGrace: Map<string, ReturnType<typeof setTimeout>>;
+    /** Last seated count written to the database. -1 means it still needs a write. */
+    seatedPersisted: number;
 };
 
 function shuffled(count: number) {
@@ -68,6 +78,109 @@ function shuffled(count: number) {
 
 export const liveRooms = new Map<string, LiveRoom>();
 
+export type CanvasScene = {
+    elements: unknown[];
+    files: Record<string, unknown>;
+};
+
+export function asCanvasScene(value: unknown): CanvasScene {
+    if (Array.isArray(value)) {
+        return { elements: value, files: {} };
+    }
+    if (!value || typeof value !== "object") {
+        return { elements: [], files: {} };
+    }
+    const record = value as { elements?: unknown; files?: unknown };
+    const files =
+        record.files && typeof record.files === "object" && !Array.isArray(record.files)
+            ? (record.files as Record<string, unknown>)
+            : {};
+    return {
+        elements: Array.isArray(record.elements) ? record.elements : [],
+        files,
+    };
+}
+
+function elementVersion(element: unknown) {
+    if (!element || typeof element !== "object") {
+        return null;
+    }
+    const record = element as { id?: unknown; version?: unknown; index?: unknown };
+    if (typeof record.id !== "string" || record.id.length === 0) {
+        return null;
+    }
+    return {
+        id: record.id,
+        version: typeof record.version === "number" ? record.version : 0,
+        index: typeof record.index === "string" ? record.index : null,
+    };
+}
+
+/**
+ * Keep, for each element id, the copy with the highest version.
+ * Order follows Excalidraw's fractional index when both sides have one.
+ */
+export function mergeElements(base: unknown[], incoming: unknown[]) {
+    const byId = new Map<
+        string,
+        { element: unknown; version: number; index: string | null; order: number }
+    >();
+    let order = 0;
+    const take = (list: unknown[]) => {
+        for (const element of list) {
+            const read = elementVersion(element);
+            if (!read) {
+                continue;
+            }
+            const prev = byId.get(read.id);
+            if (!prev) {
+                byId.set(read.id, {
+                    element,
+                    version: read.version,
+                    index: read.index,
+                    order: order++,
+                });
+                continue;
+            }
+            if (read.version > prev.version) {
+                byId.set(read.id, {
+                    element,
+                    version: read.version,
+                    index: read.index ?? prev.index,
+                    order: prev.order,
+                });
+            } else if (prev.index === null && read.index) {
+                prev.index = read.index;
+            }
+        }
+    };
+    take(base);
+    take(incoming);
+    return [...byId.values()]
+        .sort((a, b) => {
+            if (a.index && b.index && a.index !== b.index) {
+                return a.index < b.index ? -1 : 1;
+            }
+            if (a.index && !b.index) {
+                return -1;
+            }
+            if (!a.index && b.index) {
+                return 1;
+            }
+            return a.order - b.order;
+        })
+        .map((entry) => entry.element);
+}
+
+export function mergeCanvas(current: unknown, incoming: unknown): CanvasScene {
+    const base = asCanvasScene(current);
+    const next = asCanvasScene(incoming);
+    return {
+        elements: mergeElements(base.elements, next.elements),
+        files: { ...base.files, ...next.files },
+    };
+}
+
 export function createLiveRoom(row: {
     id: string;
     slug: string;
@@ -79,6 +192,7 @@ export function createLiveRoom(row: {
     createdAt: Date;
     expiresAt: Date;
     emptySince?: Date | null;
+    canvas?: unknown;
 }): LiveRoom {
     const room: LiveRoom = {
         id: row.id,
@@ -98,9 +212,12 @@ export function createLiveRoom(row: {
         askCooldowns: new Map(),
         avatarOrder: shuffled(AVATAR_COUNT),
         avatars: new Map(),
-        canvas: { elements: [], files: {} },
+        canvas: asCanvasScene(row.canvas),
+        canvasDirty: false,
         replay: [],
         replayBytes: 0,
+        markerGrace: new Map(),
+        seatedPersisted: -1,
     };
     appendReplay(room, "canvas", room.canvas);
     return room;
@@ -135,7 +252,41 @@ export function rememberLiveRoom(room: LiveRoom) {
     liveRooms.set(room.id, room);
 }
 
+export function clearMarkerGrace(room: LiveRoom, participantId?: string) {
+    if (!participantId) {
+        for (const timer of room.markerGrace.values()) {
+            clearTimeout(timer);
+        }
+        room.markerGrace.clear();
+        return;
+    }
+    const timer = room.markerGrace.get(participantId);
+    if (timer) {
+        clearTimeout(timer);
+    }
+    room.markerGrace.delete(participantId);
+}
+
+/** Hold a leaver's markers until `release` runs, so a refresh can sit back down. */
+export function armMarkerGrace(room: LiveRoom, participantId: string, release: () => void) {
+    clearMarkerGrace(room, participantId);
+    if (!holdsMarker(room, participantId)) {
+        return false;
+    }
+    const timer = setTimeout(() => {
+        room.markerGrace.delete(participantId);
+        release();
+    }, MARKER_GRACE_MS);
+    timer.unref?.();
+    room.markerGrace.set(participantId, timer);
+    return true;
+}
+
 export function forgetLiveRoom(id: string) {
+    const room = liveRooms.get(id);
+    if (room) {
+        clearMarkerGrace(room);
+    }
     liveRooms.delete(id);
 }
 
@@ -173,7 +324,7 @@ function dropDensestReplay(room: LiveRoom) {
     }
 }
 
-function trimReplay(room: LiveRoom) {
+export function trimReplay(room: LiveRoom) {
     while (
         room.replay.length > MAX_REPLAY_EVENTS ||
         room.replayBytes > MAX_REPLAY_BYTES
@@ -278,6 +429,9 @@ export function lapsedAsks(room: LiveRoom) {
 
 /** A holder who has not drawn or moved in a while hands the marker over without being nudged. */
 export function holderIsAway(room: LiveRoom, holderId: string) {
+    if (room.markerGrace.has(holderId)) {
+        return false;
+    }
     const holder = room.admitted.get(holderId);
     if (!holder) {
         return true;

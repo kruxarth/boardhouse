@@ -72,18 +72,8 @@ export type RemoteCursor = {
 const MAX_SCENE_BYTES = MAX_CANVAS_MESSAGE_BYTES - 64;
 
 export const MARKER_INK = ["#f386a1", "#1e1e1e"] as const;
-
-function scenePayload(elements: unknown, files: unknown) {
-    const withFiles = { elements, files };
-    try {
-        if (JSON.stringify(withFiles).length <= MAX_SCENE_BYTES) {
-            return withFiles;
-        }
-    } catch {
-        // fall through to elements-only
-    }
-    return { elements };
-}
+/** Warm paper, the same lamp colour as a lit window. */
+export const BOARD_BACKGROUND = "#f6f1e6";
 
 function serializeScene(elements: unknown, files: unknown) {
     try {
@@ -91,6 +81,47 @@ function serializeScene(elements: unknown, files: unknown) {
     } catch {
         return "";
     }
+}
+
+function jsonSize(value: unknown) {
+    try {
+        return new TextEncoder().encode(JSON.stringify(value)).length;
+    } catch {
+        return Number.POSITIVE_INFINITY;
+    }
+}
+
+function readElement(element: unknown) {
+    if (!element || typeof element !== "object") {
+        return null;
+    }
+    const record = element as { id?: unknown; version?: unknown };
+    if (typeof record.id !== "string" || record.id.length === 0) {
+        return null;
+    }
+    return {
+        id: record.id,
+        version: typeof record.version === "number" ? record.version : 0,
+    };
+}
+
+function packScene(elements: unknown[], files: Record<string, unknown>) {
+    const full = { elements, files };
+    if (jsonSize(full) <= MAX_SCENE_BYTES) {
+        return full;
+    }
+    const fitted: Record<string, unknown> = {};
+    for (const [id, file] of Object.entries(files)) {
+        const candidate = { elements, files: { ...fitted, [id]: file } };
+        if (jsonSize(candidate) > MAX_SCENE_BYTES) {
+            continue;
+        }
+        fitted[id] = file;
+    }
+    if (jsonSize({ elements, files: fitted }) <= MAX_SCENE_BYTES) {
+        return { elements, files: fitted };
+    }
+    return { elements, files: {} as Record<string, unknown> };
 }
 
 function collaboratorColor(id: string) {
@@ -197,7 +228,7 @@ function RemotePointers({
     trails,
     api,
     frame,
-    tick: _tick,
+    tick,
 }: {
     cursors: RemoteCursor[];
     trails: Map<string, { points: { x: number; y: number }[] }>;
@@ -234,7 +265,7 @@ function RemotePointers({
         );
     }
     return (
-        <div className="remote-pointers" aria-hidden>
+        <div className="remote-pointers" data-tick={tick} aria-hidden>
             <svg>{paths}</svg>
             {cursors.map((cursor) => {
                 const { x, y } = sceneToFrame(cursor.x, cursor.y, api, frame);
@@ -294,6 +325,8 @@ export type BoardHandle = {
     saveExcalidraw: (filename: string) => void;
     applyCursor: (cursor: RemoteCursor) => void;
     dropCursor: (id: string) => void;
+    /** Send the whole local scene. Used after a reconnect so strokes drawn offline are not dropped. */
+    broadcastScene: () => boolean;
 };
 
 type BoardCanvasProps = {
@@ -306,6 +339,8 @@ type BoardCanvasProps = {
     playback?: boolean;
     onScene: (payload: unknown) => void;
     onCursor: (x: number, y: number, tool: PointerTool, button: PointerButton) => void;
+    onDeniedDraw?: () => void;
+    onDrawing?: (drawing: boolean) => void;
 };
 
 export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function BoardCanvas(
@@ -319,6 +354,8 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
         playback = false,
         onScene,
         onCursor,
+        onDeniedDraw,
+        onDrawing,
     },
     ref
 ) {
@@ -337,17 +374,50 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
     const sceneGenRef = useRef(0);
     const hydratedRef = useRef(false);
     const lastSceneRef = useRef("");
+    const sentVersionsRef = useRef(new Map<string, number>());
+    const sentFileIdsRef = useRef(new Set<string>());
+    const latestSceneRef = useRef<{ elements: readonly unknown[]; files: Record<string, unknown> } | null>(
+        null
+    );
     const cursorsRef = useRef(cursors);
     const canDrawRef = useRef(canDraw);
     const onSceneRef = useRef(onScene);
     const onCursorRef = useRef(onCursor);
+    const onDeniedRef = useRef(onDeniedDraw);
+    const onDrawingRef = useRef(onDrawing);
+    const denyDragRef = useRef<{ x: number; y: number; sent: boolean } | null>(null);
     const frameRef = useRef<HTMLDivElement | null>(null);
     const trailsRef = useRef<Map<string, { points: { x: number; y: number }[] }>>(new Map());
     const fadeTimersRef = useRef<Map<string, number>>(new Map());
     const [overlayTick, setOverlayTick] = useState(0);
     onSceneRef.current = onScene;
     onCursorRef.current = onCursor;
+    onDeniedRef.current = onDeniedDraw;
+    onDrawingRef.current = onDrawing;
     canDrawRef.current = canDraw;
+
+    const publishDrawing = (button: PointerButton, tool: PointerTool) => {
+        onDrawingRef.current?.(canDrawRef.current && button === "down" && tool === "pointer");
+    };
+
+    const noteDeniedDrag = (x: number, y: number) => {
+        if (canDrawRef.current) {
+            denyDragRef.current = null;
+            return;
+        }
+        const drag = denyDragRef.current;
+        if (!drag) {
+            denyDragRef.current = { x, y, sent: false };
+            return;
+        }
+        if (drag.sent) {
+            return;
+        }
+        if (Math.hypot(x - drag.x, y - drag.y) > 8) {
+            drag.sent = true;
+            onDeniedRef.current?.();
+        }
+    };
 
     const bumpOverlay = useMemo(
         () =>
@@ -407,10 +477,50 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
         [bumpOverlay]
     );
 
+    const flushPublishRef = useRef<(force?: boolean) => void>(() => {});
+    flushPublishRef.current = (force = false) => {
+        const latest = latestSceneRef.current;
+        if (!latest || (!force && !canDrawRef.current)) {
+            return;
+        }
+        const changed: unknown[] = [];
+        for (const element of latest.elements) {
+            const read = readElement(element);
+            if (!read) {
+                continue;
+            }
+            const sent = sentVersionsRef.current.get(read.id);
+            if (sent === undefined || read.version > sent) {
+                changed.push(element);
+            }
+        }
+        const nextFiles: Record<string, unknown> = {};
+        for (const [id, file] of Object.entries(latest.files)) {
+            if (!sentFileIdsRef.current.has(id)) {
+                nextFiles[id] = file;
+            }
+        }
+        lastSceneRef.current = serializeScene(latest.elements, latest.files);
+        if (changed.length === 0 && Object.keys(nextFiles).length === 0) {
+            return;
+        }
+        const payload = packScene(changed, nextFiles);
+        for (const element of payload.elements) {
+            const read = readElement(element);
+            if (read) {
+                sentVersionsRef.current.set(read.id, read.version);
+            }
+        }
+        for (const id of Object.keys(payload.files)) {
+            sentFileIdsRef.current.add(id);
+        }
+        onSceneRef.current(payload);
+    };
+
     const sendThrottled = useMemo(
         () =>
-            throttle((payload: unknown) => {
-                onSceneRef.current(payload);
+            throttle(() => {
+                flushPublishRef.current();
             }, 80),
         []
     );
@@ -425,12 +535,19 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
 
     const finishApplying = useCallback(() => {
         applyingRef.current = false;
-        const pending = pendingSceneRef.current;
-        if (pending == null) {
+        const pending = pendingSceneRef.current as {
+            elements?: readonly unknown[];
+            files?: Record<string, unknown>;
+        } | null;
+        pendingSceneRef.current = null;
+        if (!pending) {
             return;
         }
-        pendingSceneRef.current = null;
-        sendThrottled(pending);
+        latestSceneRef.current = {
+            elements: pending.elements ?? [],
+            files: pending.files ?? {},
+        };
+        sendThrottled();
     }, [sendThrottled]);
 
     const applyScene = useCallback((payload: unknown, replace = false) => {
@@ -469,7 +586,34 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
             captureUpdate: "NEVER",
         });
         paintCollaborators(api, cursorsRef.current);
-        lastSceneRef.current = serializeScene(elements, api.getFiles());
+        const reconciled = Array.isArray(elements) ? elements : [];
+        const localVersion = new Map<string, number>();
+        for (const element of reconciled) {
+            const read = readElement(element);
+            if (read) {
+                localVersion.set(read.id, read.version);
+            }
+        }
+        for (const element of remoteElements ?? []) {
+            const read = readElement(element);
+            if (!read) {
+                continue;
+            }
+            const local = localVersion.get(read.id);
+            if (local !== undefined && local > read.version) {
+                continue;
+            }
+            const sent = sentVersionsRef.current.get(read.id) ?? -1;
+            if (read.version > sent) {
+                sentVersionsRef.current.set(read.id, read.version);
+            }
+        }
+        if (scene.files) {
+            for (const id of Object.keys(scene.files)) {
+                sentFileIdsRef.current.add(id);
+            }
+        }
+        lastSceneRef.current = serializeScene(reconciled, api.getFiles());
         window.setTimeout(() => {
             if (applyToken !== applyTokenRef.current) {
                 return;
@@ -505,16 +649,18 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
     const unmountedRef = useRef(false);
 
     useEffect(() => {
+        const fadeTimers = fadeTimersRef.current;
         unmountedRef.current = false;
         return () => {
             unmountedRef.current = true;
-            for (const fade of fadeTimersRef.current.values()) {
+            for (const fade of fadeTimers.values()) {
                 window.clearTimeout(fade);
             }
-            fadeTimersRef.current.clear();
+            fadeTimers.clear();
             pointerMoveThrottled.cancel();
+            sendThrottled.cancel();
         };
-    }, [pointerMoveThrottled]);
+    }, [pointerMoveThrottled, sendThrottled]);
 
     useEffect(() => {
         if (playback || !apiReady) {
@@ -653,7 +799,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
         syncTool(canDraw, allowLaser);
         syncInk(markerSlot);
         apiRef.current?.updateScene({
-            appState: { viewBackgroundColor: "#ffffff" },
+            appState: { viewBackgroundColor: BOARD_BACKGROUND },
             captureUpdate: "NEVER",
         });
         window.setTimeout(() => {
@@ -672,6 +818,21 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
             paintCollaborators(apiRef.current, next);
             rememberTrail(cursor);
             bumpOverlay();
+        },
+        broadcastScene() {
+            const api = apiRef.current;
+            if (!api) {
+                return false;
+            }
+            sentVersionsRef.current.clear();
+            sentFileIdsRef.current.clear();
+            latestSceneRef.current = {
+                elements: api.getSceneElementsIncludingDeleted(),
+                files: api.getFiles(),
+            };
+            lastSceneRef.current = "";
+            flushPublishRef.current(true);
+            return true;
         },
         dropCursor(id) {
             const current = cursorsRef.current;
@@ -701,7 +862,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                 elements: liveElements(api),
                 appState: {
                     exportBackground: true,
-                    viewBackgroundColor: "#ffffff",
+                    viewBackgroundColor: BOARD_BACKGROUND,
                 },
                 files: api.getFiles(),
                 mimeType: "image/png",
@@ -721,7 +882,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                             version: 2,
                             source: "https://excalidraw.com",
                             elements: liveElements(api),
-                            appState: { viewBackgroundColor: "#ffffff" },
+                            appState: { viewBackgroundColor: BOARD_BACKGROUND },
                             files: api.getFiles(),
                         }),
                     ],
@@ -749,7 +910,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                 aiEnabled={false}
                 initialData={{
                     appState: {
-                        viewBackgroundColor: "#ffffff",
+                        viewBackgroundColor: BOARD_BACKGROUND,
                         currentItemStrokeColor:
                             markerSlot === null ? "#1e1e1e" : MARKER_INK[markerSlot],
                     },
@@ -780,17 +941,26 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     if (!hydratedRef.current) {
                         return;
                     }
-                    const payload = scenePayload(elements, files);
-                    const serialized = JSON.stringify(payload);
+                    const api = apiRef.current;
+                    const list = api
+                        ? api.getSceneElementsIncludingDeleted()
+                        : Array.isArray(elements)
+                          ? elements
+                          : [];
+                    const fileMap =
+                        files && typeof files === "object" && !Array.isArray(files)
+                            ? (files as Record<string, unknown>)
+                            : {};
+                    if (applyingRef.current) {
+                        pendingSceneRef.current = { elements: list, files: fileMap };
+                        return;
+                    }
+                    const serialized = serializeScene(list, fileMap);
                     if (serialized === lastSceneRef.current) {
                         return;
                     }
-                    lastSceneRef.current = serialized;
-                    if (applyingRef.current) {
-                        pendingSceneRef.current = payload;
-                        return;
-                    }
-                    sendThrottled(payload);
+                    latestSceneRef.current = { elements: list, files: fileMap };
+                    sendThrottled();
                 }}
                 onPointerDown={(
                     activeTool: { type?: string },
@@ -806,6 +976,8 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     pointerDownRef.current = true;
                     lastPointerButtonRef.current = "down";
                     lastPointRef.current = { x, y, tool };
+                    noteDeniedDrag(x, y);
+                    publishDrawing("down", tool);
                     pointerMoveThrottled.cancel();
                     onCursorRef.current(x, y, tool, "down");
                 }}
@@ -820,6 +992,8 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     pointerDownRef.current = false;
                     lastPointerButtonRef.current = "up";
                     lastPointRef.current = { x, y, tool };
+                    denyDragRef.current = null;
+                    publishDrawing("up", tool);
                     pointerMoveThrottled.cancel();
                     onCursorRef.current(x, y, tool, "up");
                 }}
@@ -839,6 +1013,10 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                     const x = payload.pointer.x;
                     const y = payload.pointer.y;
                     lastPointRef.current = { x, y, tool };
+                    if (pointerDownRef.current) {
+                        noteDeniedDrag(x, y);
+                    }
+                    publishDrawing(button, tool);
                     const buttonChanged = lastPointerButtonRef.current !== button;
                     lastPointerButtonRef.current = button;
                     if (buttonChanged) {

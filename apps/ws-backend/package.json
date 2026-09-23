@@ -3,8 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "vitest run",
     "build": "tsc -p tsconfig.json",
+    "check-types": "tsc --noEmit",
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts"
   },
@@ -17,14 +18,12 @@
     "@repo/common": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/typescript-config": "workspace:*",
-    "jsonwebtoken": "^9.0.3",
-    "livekit-server-sdk": "^2.15.0",
     "tsx": "^4.23.12",
     "ws": "^8.21.1"
   },
   "devDependencies": {
-    "@types/jsonwebtoken": "^9.0.10",
     "@types/node": "^22.15.3",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "vitest": "^3.2.4"
   }
 }

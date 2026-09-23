@@ -23,6 +23,10 @@ model Room {
   expiresAt           DateTime
   /** Null while someone is seated. Set when the last person leaves, or on create. After EMPTY_TABLE_MS the house offers the table for claim. */
   emptySince          DateTime?
+  /** People currently in seats. The WebSocket server updates this as they come and go. */
+  seated              Int      @default(0)
+  /** Latest board. The WebSocket server writes this every few seconds so a restart does not wipe strokes. */
+  canvas              Json?
 
   @@index([expiresAt])
   @@index([emptySince])

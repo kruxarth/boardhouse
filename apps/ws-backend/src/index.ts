@@ -1,52 +1,27 @@
 import { createServer } from "http";
-import { randomUUID } from "crypto";
-import jwt from "jsonwebtoken";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import { JWT_SECRET } from "@repo/backend-common/config";
-import {
-    MAX_CANVAS_MESSAGE_BYTES,
-    MAX_SEATS,
-    MAX_WAITERS,
-    REACTION_MIN_GAP_MS,
-} from "@repo/common/constants";
-import {
-    ClientMessageSchema,
-    type AskOutcome,
-    type RoomStatePayload,
-} from "@repo/common/types";
-import { prismaClient } from "@repo/db";
+import { MAX_CANVAS_MESSAGE_BYTES } from "@repo/common/constants";
+import { ClientMessageSchema } from "@repo/common/types";
+import { Prisma, prismaClient } from "@repo/db";
+import { clearAuthTimeout, type Connection } from "./connection";
+import { handlers } from "./handlers";
 import { enqueueRoomEvent } from "./queue";
-import { deleteLivekitRooms } from "./livekit";
 import {
-    appendReplay,
-    asksHeldBy,
-    assignAvatar,
-    ensureUniqueAvatars,
-    clearAsksForSlot,
-    cooldownLeft,
-    createLiveRoom,
-    dropMarkersHeldBy,
-    exportReplay,
-    forgetLiveRoom,
-    getLiveRoom,
-    guestSeatOpen,
-    holderIsAway,
-    holdsMarker,
-    hostSeatOpen,
-    isExpired,
-    lapsedAsks,
-    liveRooms,
-    newAsk,
-    pendingAskFrom,
-    rememberLiveRoom,
-    retargetAsks,
-    startCooldown,
-    type LiveRoom,
-    type MarkerAsk,
-    type Seat,
-} from "./store";
+    closeSitting,
+    detachSocket,
+    markTableEmpty,
+    markTableOccupied,
+    readSession,
+    sendError,
+    sendJson,
+    sweepLapsedAsks,
+} from "./room-ops";
+import { getLiveRoom, isExpired, liveRooms } from "./store";
 
 const port = Number(process.env.PORT) || 8081;
+const AUTH_TIMEOUT_MS = 10_000;
+const CANVAS_SAVE_MS = 5_000;
+
 const httpServer = createServer((req, res) => {
     const path = req.url?.split("?")[0];
     if (path === "/health") {
@@ -57,570 +32,33 @@ const httpServer = createServer((req, res) => {
     res.writeHead(404);
     res.end();
 });
+
 const wss = new WebSocketServer({
     server: httpServer,
     perMessageDeflate: false,
+    maxPayload: MAX_CANVAS_MESSAGE_BYTES,
 });
 
-type Session = {
-    participantId: string;
-    name: string;
-};
+type AliveSocket = WebSocket & { isAlive?: boolean };
 
-type Connection = {
-    ws: WebSocket;
-    session: Session | null;
-    room: LiveRoom | null;
-    viaFormerSlug: boolean;
-};
-
-function sendJson(ws: WebSocket, payload: unknown) {
-    if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify(payload));
+function byteLength(data: RawData) {
+    if (Array.isArray(data)) {
+        return data.reduce((total, chunk) => total + chunk.length, 0);
     }
-}
-
-function sendError(ws: WebSocket, message: string) {
-    sendJson(ws, { type: "error", message });
-}
-
-function readSession(token: string): Session | null {
-    try {
-        const decoded = jwt.verify(token, JWT_SECRET);
-        if (
-            typeof decoded === "string" ||
-            typeof decoded.sub !== "string" ||
-            typeof decoded.name !== "string"
-        ) {
-            return null;
-        }
-        return { participantId: decoded.sub, name: decoded.name };
-    } catch {
-        return null;
+    if (Buffer.isBuffer(data)) {
+        return data.length;
     }
-}
-
-function presenceOf(seat: Seat) {
-    return {
-        id: seat.participantId,
-        name: seat.name,
-        muted: seat.muted,
-        avatar: Number.isInteger(seat.avatar) ? seat.avatar : 0,
-    };
-}
-
-function roomState(room: LiveRoom, forHost: boolean, viaFormerSlug: boolean): RoomStatePayload {
-    ensureUniqueAvatars(room);
-    return {
-        type: "room_state",
-        slug: room.slug,
-        name: room.name,
-        accessMode: room.accessMode,
-        expiresAt: new Date(room.expiresAt).toISOString(),
-        hostParticipantId: room.hostParticipantId,
-        seats: [...room.admitted.values()].map(presenceOf),
-        waiters: forHost ? [...room.waiting.values()].map(presenceOf) : [],
-        markers: room.markers,
-        usedSeats: room.admitted.size,
-        maxSeats: MAX_SEATS,
-        viaFormerSlug,
-    };
-}
-
-function broadcastAdmitted(room: LiveRoom, payload: unknown, except?: WebSocket) {
-    for (const seat of room.admitted.values()) {
-        if (seat.ws !== except) {
-            sendJson(seat.ws, payload);
-        }
-    }
-}
-
-function broadcastRoomState(room: LiveRoom) {
-    for (const seat of room.admitted.values()) {
-        const isHost = seat.participantId === room.hostParticipantId;
-        sendJson(seat.ws, roomState(room, isHost, false));
-    }
-    for (const seat of room.waiting.values()) {
-        sendJson(seat.ws, roomState(room, false, true));
-    }
-}
-
-function broadcastMarkers(room: LiveRoom) {
-    const payload = { type: "marker_state", slots: room.markers };
-    broadcastAdmitted(room, payload);
-}
-
-function askPayload(room: LiveRoom, ask: MarkerAsk) {
-    const from = room.admitted.get(ask.fromParticipantId);
-    return {
-        requestId: ask.requestId,
-        fromParticipantId: ask.fromParticipantId,
-        fromName: from?.name ?? "Someone",
-        fromAvatar: from?.avatar ?? 0,
-        slot: ask.slot,
-        expiresAt: new Date(ask.expiresAt).toISOString(),
-    };
-}
-
-function sendAsks(room: LiveRoom, holderId: string) {
-    const holder = room.admitted.get(holderId);
-    if (!holder) {
-        return;
-    }
-    sendJson(holder.ws, {
-        type: "marker_asks",
-        asks: asksHeldBy(room, holderId).map((ask) => askPayload(room, ask)),
-    });
-}
-
-/** The asker's own copy of their request, so a reload does not lose the countdown. */
-function sendPendingAsk(room: LiveRoom, participantId: string) {
-    const seat = room.admitted.get(participantId);
-    if (!seat) {
-        return;
-    }
-    const ask = pendingAskFrom(room, participantId);
-    sendJson(seat.ws, {
-        type: "marker_ask_state",
-        ask: ask
-            ? {
-                  requestId: ask.requestId,
-                  slot: ask.slot,
-                  holderId: ask.holderId,
-                  holderName: room.admitted.get(ask.holderId)?.name ?? "someone",
-                  expiresAt: new Date(ask.expiresAt).toISOString(),
-              }
-            : null,
-    });
-}
-
-function settleAsk(room: LiveRoom, ask: MarkerAsk, outcome: AskOutcome) {
-    if (outcome !== "given") {
-        startCooldown(room, ask.fromParticipantId, ask.slot);
-    }
-    const asker = room.admitted.get(ask.fromParticipantId);
-    if (asker) {
-        sendJson(asker.ws, { type: "marker_ask_done", slot: ask.slot, outcome });
-    }
-    sendPendingAsk(room, ask.fromParticipantId);
-}
-
-function refreshAsks(room: LiveRoom, extraIds: string[] = []) {
-    const ids = new Set<string>(extraIds);
-    for (const holderId of room.markers) {
-        if (holderId) {
-            ids.add(holderId);
-        }
-    }
-    for (const id of ids) {
-        sendAsks(room, id);
-    }
-}
-
-function moveMarker(room: LiveRoom, slot: 0 | 1, holderId: string | null, extraIds: string[] = []) {
-    const previous = room.markers[slot];
-    room.markers[slot] = holderId;
-    if (previous) {
-        touchSeat(room, previous);
-    }
-    if (holderId) {
-        touchSeat(room, holderId);
-    }
-    const settled: Array<[MarkerAsk, AskOutcome]> = [];
-    if (holderId) {
-        for (const ask of retargetAsks(room, slot, holderId)) {
-            settled.push([ask, "given"]);
-        }
-    } else {
-        for (const ask of clearAsksForSlot(room, slot)) {
-            settled.push([ask, "lapsed"]);
-        }
-    }
-    broadcastMarkers(room);
-    for (const [ask, outcome] of settled) {
-        settleAsk(room, ask, outcome);
-    }
-    refreshAsks(room, [...extraIds, previous].filter((id): id is string => Boolean(id)));
-}
-
-/** Requests nobody answered in time. Both sides are told so neither is left hanging. */
-function sweepLapsedAsks(room: LiveRoom) {
-    const lapsed = lapsedAsks(room);
-    if (lapsed.length === 0) {
-        return;
-    }
-    const holders = new Set<string>();
-    for (const ask of lapsed) {
-        room.asks.delete(ask.requestId);
-        holders.add(ask.holderId);
-    }
-    for (const ask of lapsed) {
-        settleAsk(room, ask, "lapsed");
-    }
-    for (const holderId of holders) {
-        sendAsks(room, holderId);
-    }
-}
-
-function closeSitting(room: LiveRoom, message = "This sitting is over") {
-    const payload = { type: "expired", message };
-    for (const seat of [...room.admitted.values(), ...room.waiting.values()]) {
-        sendJson(seat.ws, payload);
-        seat.ws.close(4000, "this sitting is over");
-    }
-    forgetLiveRoom(room.id);
-}
-
-async function wipeSitting(room: LiveRoom, message = "This sitting is over") {
-    const slugs = [room.slug, ...room.formerSlugs];
-    try {
-        await prismaClient.room.delete({ where: { id: room.id } });
-    } catch {
-        // Already gone.
-    }
-    closeSitting(room, message);
-    await deleteLivekitRooms(slugs);
-}
-
-async function persistEmptySince(room: LiveRoom) {
-    try {
-        await prismaClient.room.update({
-            where: { id: room.id },
-            data: { emptySince: room.emptySince === null ? null : new Date(room.emptySince) },
-        });
-    } catch {
-        // Room already wiped.
-    }
-}
-
-function markTableEmpty(room: LiveRoom) {
-    if (room.admitted.size > 0) {
-        return;
-    }
-    if (room.emptySince === null) {
-        room.emptySince = Date.now();
-        void persistEmptySince(room);
-    }
-}
-
-function markTableOccupied(room: LiveRoom) {
-    if (room.emptySince === null) {
-        return;
-    }
-    room.emptySince = null;
-    void persistEmptySince(room);
-}
-
-function detachSocket(room: LiveRoom, ws: WebSocket) {
-    for (const [id, seat] of room.admitted) {
-        if (seat.ws === ws) {
-            room.admitted.delete(id);
-            const { changed, dropped } = dropMarkersHeldBy(room, id);
-            broadcastAdmitted(room, {
-                type: "participant_left",
-                participantId: id,
-            });
-            if (changed) {
-                broadcastMarkers(room);
-            }
-            for (const ask of dropped) {
-                if (ask.fromParticipantId !== id) {
-                    settleAsk(room, ask, "lapsed");
-                }
-            }
-            refreshAsks(room);
-            broadcastRoomState(room);
-            markTableEmpty(room);
-            return;
-        }
-    }
-    for (const [id, seat] of room.waiting) {
-        if (seat.ws === ws) {
-            room.waiting.delete(id);
-            broadcastRoomState(room);
-            return;
-        }
-    }
-}
-
-function replaceExisting(room: LiveRoom, participantId: string, incoming: WebSocket) {
-    const existing = room.admitted.get(participantId) ?? room.waiting.get(participantId);
-    if (existing && existing.ws !== incoming) {
-        sendJson(existing.ws, {
-            type: "error",
-            message: "Connected from another tab",
-        });
-        existing.ws.close(4001, "replaced");
-        room.admitted.delete(participantId);
-        room.waiting.delete(participantId);
-    }
-}
-
-function sessionOf(connection: Connection): Session {
-    if (!connection.session) {
-        throw new Error("unauthenticated");
-    }
-    return connection.session;
-}
-
-function authenticate(connection: Connection, token?: string): Session | null {
-    if (connection.session) {
-        return connection.session;
-    }
-    if (!token) {
-        sendJson(connection.ws, { type: "auth_error", message: "Missing token" });
-        return null;
-    }
-    const session = readSession(token);
-    if (!session) {
-        sendJson(connection.ws, { type: "auth_error", message: "Invalid token" });
-        return null;
-    }
-    connection.session = session;
-    return session;
-}
-
-function makeSeat(room: LiveRoom, connection: Connection, admitted: boolean): Seat {
-    const session = connection.session;
-    if (!session) {
-        throw new Error("unauthenticated");
-    }
-    return {
-        ws: connection.ws,
-        participantId: session.participantId,
-        name: session.name,
-        muted: true,
-        admitted,
-        avatar: assignAvatar(room, session.participantId),
-        activeAt: Date.now(),
-        reactedAt: 0,
-    };
-}
-
-async function loadRoom(slug: string) {
-    const row = await prismaClient.room.findFirst({
-        where: {
-            OR: [{ slug }, { formerSlugs: { has: slug } }],
-        },
-    });
-    if (!row) {
-        return "missing" as const;
-    }
-    if (row.expiresAt.getTime() <= Date.now()) {
-        const live = getLiveRoom(row.id);
-        if (live) {
-            closeSitting(live);
-        }
-        return "expired" as const;
-    }
-
-    let live = getLiveRoom(row.id);
-    if (live && live.hostKey !== row.hostKey) {
-        closeSitting(live, "This table was claimed");
-        live = undefined;
-    }
-    if (!live) {
-        live = createLiveRoom(row);
-        rememberLiveRoom(live);
-        if (!row.emptySince) {
-            void persistEmptySince(live);
-        }
-    } else {
-        live.slug = row.slug;
-        live.formerSlugs = new Set(row.formerSlugs);
-        live.hostKey = row.hostKey;
-        live.hostParticipantId = row.hostParticipantId;
-        live.accessMode = row.accessMode === "open" ? "open" : "knock";
-        live.name = row.name;
-        live.expiresAt = row.expiresAt.getTime();
-    }
-    return { live, viaFormer: row.slug !== slug };
-}
-
-function admit(room: LiveRoom, connection: Connection) {
-    replaceExisting(room, sessionOf(connection).participantId, connection.ws);
-    room.waiting.delete(sessionOf(connection).participantId);
-    const seat = makeSeat(room, connection, true);
-    room.admitted.set(seat.participantId, seat);
-    markTableOccupied(room);
-    connection.room = room;
-    connection.viaFormerSlug = false;
-
-    sendJson(connection.ws, { type: "joined", slug: room.slug });
-    sendJson(connection.ws, roomState(room, seat.participantId === room.hostParticipantId, false));
-    sendJson(connection.ws, { type: "marker_state", slots: room.markers });
-    sendAsks(room, seat.participantId);
-    sendPendingAsk(room, seat.participantId);
-    sendJson(connection.ws, { type: "canvas_snapshot", payload: room.canvas ?? null });
-    broadcastAdmitted(
-        room,
-        {
-            type: "participant_joined",
-            participant: presenceOf(seat),
-        },
-        connection.ws
-    );
-    broadcastRoomState(room);
-}
-
-function putInWaiting(room: LiveRoom, connection: Connection, viaFormer: boolean) {
-    replaceExisting(room, sessionOf(connection).participantId, connection.ws);
-    if (room.waiting.size >= MAX_WAITERS && !room.waiting.has(sessionOf(connection).participantId)) {
-        sendJson(connection.ws, { type: "full", message: "Too many people at the door" });
-        return;
-    }
-    const seat = makeSeat(room, connection, false);
-    room.waiting.set(seat.participantId, seat);
-    connection.room = room;
-    connection.viaFormerSlug = viaFormer;
-    sendJson(connection.ws, { type: "waiting" });
-    const host = room.admitted.get(room.hostParticipantId);
-    if (host) {
-        sendJson(host.ws, {
-            type: "knock",
-            participant: presenceOf(seat),
-        });
-        sendJson(host.ws, roomState(room, true, false));
-    }
-}
-
-function isHost(room: LiveRoom, participantId: string) {
-    return room.hostParticipantId === participantId;
-}
-
-function touchSeat(room: LiveRoom, participantId: string) {
-    const seat = room.admitted.get(participantId);
-    if (seat) {
-        seat.activeAt = Date.now();
-    }
-}
-
-async function reclaimHost(room: LiveRoom, participantId: string) {
-    const previous = room.hostParticipantId;
-    room.hostParticipantId = participantId;
-    if (room.markers[0] === previous) {
-        room.markers[0] = participantId;
-    }
-    await prismaClient.room.update({
-        where: { id: room.id },
-        data: { hostParticipantId: participantId },
-    });
-}
-
-async function handleJoin(
-    connection: Connection,
-    roomId: string,
-    hostKey?: string,
-    token?: string,
-    fromHouse = false
-) {
-    const session = authenticate(connection, token);
-    if (!session) {
-        return;
-    }
-
-    let loaded: Awaited<ReturnType<typeof loadRoom>>;
-    try {
-        loaded = await loadRoom(roomId);
-    } catch (error) {
-        console.error("Error loading room:", error);
-        sendError(connection.ws, "Could not open this table");
-        return;
-    }
-    if (loaded === "missing") {
-        sendJson(connection.ws, { type: "missing", message: "No table at this door" });
-        return;
-    }
-    if (loaded === "expired") {
-        sendJson(connection.ws, { type: "expired", message: "This sitting is over" });
-        return;
-    }
-
-    const { live, viaFormer } = loaded;
-    await enqueueRoomEvent(live.id, async () => {
-        if (isExpired(live)) {
-            closeSitting(live);
-            sendJson(connection.ws, { type: "expired", message: "This sitting is over" });
-            return;
-        }
-
-        const validHostKey = Boolean(hostKey && hostKey === live.hostKey);
-        if (validHostKey && session.participantId !== live.hostParticipantId) {
-            await reclaimHost(live, session.participantId);
-        }
-
-        const host = validHostKey || isHost(live, session.participantId);
-
-        if (host) {
-            if (!hostSeatOpen(live) && !live.admitted.has(session.participantId)) {
-                sendJson(connection.ws, { type: "full", message: "The table is full" });
-                return;
-            }
-            admit(live, connection);
-            return;
-        }
-
-        if (live.admitted.has(session.participantId)) {
-            admit(live, connection);
-            return;
-        }
-
-        const houseMustKnock = fromHouse && live.accessMode === "knock";
-        if (viaFormer || houseMustKnock) {
-            putInWaiting(live, connection, viaFormer);
-            return;
-        }
-
-        if (!guestSeatOpen(live)) {
-            sendJson(connection.ws, { type: "full", message: "The table is full" });
-            return;
-        }
-
-        admit(live, connection);
-    });
-}
-
-function requireAdmitted(connection: Connection): LiveRoom | null {
-    const session = connection.session;
-    if (!session) {
-        sendJson(connection.ws, { type: "auth_error", message: "Invalid token" });
-        return null;
-    }
-    const room = connection.room;
-    if (!room) {
-        sendError(connection.ws, "Join a table first");
-        return null;
-    }
-    if (isExpired(room)) {
-        closeSitting(room);
-        return null;
-    }
-    if (!room.admitted.has(session.participantId)) {
-        sendError(connection.ws, "You are not at the table");
-        return null;
-    }
-    return room;
-}
-
-function requireHost(connection: Connection): LiveRoom | null {
-    const room = requireAdmitted(connection);
-    if (!room || !connection.session) {
-        return null;
-    }
-    if (!isHost(room, sessionOf(connection).participantId)) {
-        sendError(connection.ws, "Only the host can do that");
-        return null;
-    }
-    return room;
+    return data.byteLength;
 }
 
 async function handleMessage(connection: Connection, data: RawData) {
-    const raw = data.toString();
-    if (raw.length > MAX_CANVAS_MESSAGE_BYTES) {
+    if (byteLength(data) > MAX_CANVAS_MESSAGE_BYTES) {
         sendError(connection.ws, "Message too large");
+        connection.ws.close(1009, "message too large");
         return;
     }
 
+    const raw = data.toString();
     let parsedJson: unknown;
     try {
         parsedJson = JSON.parse(raw);
@@ -636,15 +74,10 @@ async function handleMessage(connection: Connection, data: RawData) {
     }
 
     const message = parsed.data;
+    const handler = handlers[message.type];
 
     if (message.type === "join") {
-        await handleJoin(
-            connection,
-            message.roomId,
-            message.hostKey,
-            message.token,
-            message.fromHouse === true
-        );
+        await handler(connection, message);
         return;
     }
 
@@ -653,26 +86,8 @@ async function handleMessage(connection: Connection, data: RawData) {
         return;
     }
 
-    if (message.type === "leave") {
-        if (connection.room) {
-            detachSocket(connection.room, connection.ws);
-            connection.room = null;
-        }
-        sendJson(connection.ws, { type: "left" });
-        return;
-    }
-
-    if (message.type === "knock") {
-        const room = connection.room;
-        if (!room || !room.waiting.has(sessionOf(connection).participantId)) {
-            sendError(connection.ws, "You are not waiting at this door");
-            return;
-        }
-        const seat = room.waiting.get(sessionOf(connection).participantId);
-        const host = room.admitted.get(room.hostParticipantId);
-        if (seat && host) {
-            sendJson(host.ws, { type: "knock", participant: presenceOf(seat) });
-        }
+    if (message.type === "leave" || message.type === "knock") {
+        await handler(connection, message);
         return;
     }
 
@@ -683,359 +98,19 @@ async function handleMessage(connection: Connection, data: RawData) {
     }
 
     await enqueueRoomEvent(roomId, async () => {
-        if (message.type === "admit") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            const waiter = room.waiting.get(message.participantId);
-            if (!waiter) {
-                sendError(connection.ws, "That person is not waiting");
-                return;
-            }
-            if (!guestSeatOpen(room) && !room.admitted.has(message.participantId)) {
-                sendJson(connection.ws, { type: "full", message: "The table is full" });
-                sendJson(waiter.ws, { type: "full", message: "The table is full" });
-                return;
-            }
-            const guestConnection: Connection = {
-                ws: waiter.ws,
-                session: { participantId: waiter.participantId, name: waiter.name },
-                room,
-                viaFormerSlug: false,
-            };
-            admit(room, guestConnection);
-            return;
-        }
-
-        if (message.type === "deny") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            const waiter = room.waiting.get(message.participantId);
-            if (!waiter) {
-                return;
-            }
-            room.waiting.delete(message.participantId);
-            sendJson(waiter.ws, { type: "denied", message: "The host kept the door closed" });
-            broadcastRoomState(room);
-            return;
-        }
-
-        if (message.type === "set_mode") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            room.accessMode = message.accessMode;
-            await prismaClient.room.update({
-                where: { id: room.id },
-                data: { accessMode: message.accessMode },
-            });
-            broadcastRoomState(room);
-            return;
-        }
-
-        if (message.type === "rotate_slug") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            const oldSlug = room.slug;
-            const nextSlug = `table-${randomUUID().slice(0, 8)}`;
-            room.formerSlugs.add(oldSlug);
-            room.slug = nextSlug;
-            await prismaClient.room.update({
-                where: { id: room.id },
-                data: {
-                    slug: nextSlug,
-                    formerSlugs: [...room.formerSlugs],
-                },
-            });
-            broadcastAdmitted(room, {
-                type: "slug_rotated",
-                slug: nextSlug,
-                formerSlug: oldSlug,
-            });
-            broadcastRoomState(room);
-            return;
-        }
-
-        if (message.type === "end_room") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            await wipeSitting(room, "The host ended this sitting");
-            return;
-        }
-
-        if (message.type === "take_marker") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            if (room.markers[message.slot] !== null) {
-                sendError(connection.ws, "That marker is already taken");
-                return;
-            }
-            moveMarker(room, message.slot, sessionOf(connection).participantId);
-            sendJson(connection.ws, {
-                type: "marker_ack",
-                slots: room.markers,
-            });
-            return;
-        }
-
-        if (message.type === "ask_marker") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            const me = sessionOf(connection).participantId;
-            const slot = message.slot;
-            const holderId = room.markers[slot];
-            if (!holderId) {
-                sendError(connection.ws, "Nobody is holding that marker");
-                return;
-            }
-            if (holderId === me) {
-                sendError(connection.ws, "You already have that marker");
-                return;
-            }
-            if (pendingAskFrom(room, me)) {
-                sendError(connection.ws, "You already have an ask out");
-                return;
-            }
-            if (cooldownLeft(room, me, slot) > 0) {
-                sendError(connection.ws, "Give them a moment");
-                return;
-            }
-            // Nobody is home. Hand it over rather than running a timer nobody will answer.
-            if (holderIsAway(room, holderId)) {
-                moveMarker(room, slot, me, [holderId]);
-                sendJson(connection.ws, { type: "marker_ask_done", slot, outcome: "given" });
-                return;
-            }
-            const ask = newAsk(me, holderId, slot);
-            room.asks.set(ask.requestId, ask);
-            sendAsks(room, holderId);
-            sendPendingAsk(room, me);
-            return;
-        }
-
-        if (message.type === "cancel_ask") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            const me = sessionOf(connection).participantId;
-            const ask = pendingAskFrom(room, me);
-            if (!ask) {
-                return;
-            }
-            room.asks.delete(ask.requestId);
-            sendAsks(room, ask.holderId);
-            sendPendingAsk(room, me);
-            return;
-        }
-
-        if (message.type === "answer_marker") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            const ask = room.asks.get(message.requestId);
-            if (!ask) {
-                sendError(connection.ws, "That ask is gone");
-                return;
-            }
-            if (ask.holderId !== sessionOf(connection).participantId) {
-                sendError(connection.ws, "That ask is not for you");
-                return;
-            }
-            room.asks.delete(message.requestId);
-            touchSeat(room, sessionOf(connection).participantId);
-            const asker = room.admitted.get(ask.fromParticipantId);
-            const oldHolder = ask.holderId;
-            if (message.give && room.markers[ask.slot] === ask.holderId && asker) {
-                moveMarker(room, ask.slot, ask.fromParticipantId, [oldHolder]);
-                settleAsk(room, ask, "given");
-            } else {
-                settleAsk(room, ask, "kept");
-                sendAsks(room, oldHolder);
-            }
-            return;
-        }
-
-        if (message.type === "drop_marker") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            if (room.markers[message.slot] !== sessionOf(connection).participantId) {
-                sendError(connection.ws, "You are not holding that marker");
-                return;
-            }
-            moveMarker(room, message.slot, null, [sessionOf(connection).participantId]);
-            return;
-        }
-
-        if (message.type === "give_marker") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            if (room.markers[message.slot] !== sessionOf(connection).participantId) {
-                sendError(connection.ws, "You are not holding that marker");
-                return;
-            }
-            if (!room.admitted.has(message.toParticipantId)) {
-                sendError(connection.ws, "They are not at the table");
-                return;
-            }
-            moveMarker(room, message.slot, message.toParticipantId, [
-                sessionOf(connection).participantId,
-            ]);
-            return;
-        }
-
-        if (message.type === "host_take_marker") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            moveMarker(room, message.slot, sessionOf(connection).participantId);
-            return;
-        }
-
-        if (message.type === "host_give_marker") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            if (!room.admitted.has(message.toParticipantId)) {
-                sendError(connection.ws, "They are not at the table");
-                return;
-            }
-            moveMarker(room, message.slot, message.toParticipantId);
-            return;
-        }
-
-        if (message.type === "canvas") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            if (!holdsMarker(room, sessionOf(connection).participantId)) {
-                sendError(connection.ws, "Only marker holders can draw");
-                return;
-            }
-            touchSeat(room, sessionOf(connection).participantId);
-            room.canvas = message.payload;
-            appendReplay(room, "canvas", message.payload);
-            broadcastAdmitted(
-                room,
-                { type: "canvas", payload: message.payload },
-                connection.ws
-            );
-            sendJson(connection.ws, { type: "canvas_ack" });
-            return;
-        }
-
-        if (message.type === "cursor") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            touchSeat(room, sessionOf(connection).participantId);
-            broadcastAdmitted(
-                room,
-                {
-                    type: "cursor",
-                    participantId: sessionOf(connection).participantId,
-                    name: sessionOf(connection).name,
-                    x: message.x,
-                    y: message.y,
-                    tool: message.tool ?? "laser",
-                    button: message.button ?? "up",
-                },
-                connection.ws
-            );
-            return;
-        }
-
-        if (message.type === "mute_participant") {
-            const room = requireHost(connection);
-            if (!room) {
-                return;
-            }
-            const target = room.admitted.get(message.participantId);
-            if (!target) {
-                sendError(connection.ws, "They are not at the table");
-                return;
-            }
-            target.muted = true;
-            sendJson(target.ws, { type: "force_mute" });
-            broadcastRoomState(room);
-            return;
-        }
-
-        if (message.type === "set_muted") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            const seat = room.admitted.get(sessionOf(connection).participantId);
-            if (seat) {
-                seat.muted = message.muted;
-                broadcastRoomState(room);
-            }
-            return;
-        }
-
-        if (message.type === "react") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            const seat = room.admitted.get(sessionOf(connection).participantId);
-            if (!seat) {
-                return;
-            }
-            const now = Date.now();
-            if (now - seat.reactedAt < REACTION_MIN_GAP_MS) {
-                return;
-            }
-            seat.reactedAt = now;
-            seat.activeAt = now;
-            broadcastAdmitted(room, {
-                type: "reaction",
-                id: randomUUID(),
-                participantId: seat.participantId,
-                emoji: message.emoji,
-            });
-            return;
-        }
-
-        if (message.type === "get_replay") {
-            const room = requireAdmitted(connection);
-            if (!room) {
-                return;
-            }
-            try {
-                sendJson(connection.ws, exportReplay(room));
-            } catch {
-                sendError(connection.ws, "Could not build that replay");
-            }
-        }
+        await handler(connection, message);
     });
 }
 
 const connections = new Set<Connection>();
 
 wss.on("connection", (ws, request) => {
+    const alive = ws as AliveSocket;
+    alive.isAlive = true;
+    ws.on("pong", () => {
+        alive.isAlive = true;
+    });
+
     const url = new URL(request.url ?? "/", "ws://localhost");
     const token = url.searchParams.get("token");
     const session = token ? readSession(token) : null;
@@ -1048,13 +123,15 @@ wss.on("connection", (ws, request) => {
     };
     connections.add(connection);
 
-    sendJson(ws, { type: "hello", authed: Boolean(session) });
+    if (!session) {
+        connection.authTimer = setTimeout(() => {
+            if (!connection.session && ws.readyState === WebSocket.OPEN) {
+                ws.close(4008, "authenticate");
+            }
+        }, AUTH_TIMEOUT_MS);
+    }
 
-    const heartbeat = setInterval(() => {
-        if (ws.readyState === WebSocket.OPEN) {
-            ws.ping();
-        }
-    }, 20_000);
+    sendJson(ws, { type: "hello", authed: Boolean(session) });
 
     let messageChain = Promise.resolve();
     ws.on("message", (data) => {
@@ -1067,7 +144,7 @@ wss.on("connection", (ws, request) => {
     });
 
     ws.on("close", () => {
-        clearInterval(heartbeat);
+        clearAuthTimeout(connection);
         connections.delete(connection);
         if (connection.room) {
             detachSocket(connection.room, ws);
@@ -1079,15 +156,79 @@ wss.on("connection", (ws, request) => {
     });
 });
 
-httpServer.listen(port, "0.0.0.0", () => {
-    console.log(`WebSocket backend running on ${port}`);
-    if (!process.env.DATABASE_URL) {
-        console.error("DATABASE_URL is not set; joins will fail");
+setInterval(() => {
+    for (const client of wss.clients) {
+        const ws = client as AliveSocket;
+        if (ws.readyState !== WebSocket.OPEN) {
+            continue;
+        }
+        if (ws.isAlive === false) {
+            ws.terminate();
+            continue;
+        }
+        ws.isAlive = false;
+        ws.ping();
     }
-    if (!process.env.JWT_SECRET) {
-        console.error("JWT_SECRET is not set; using the default. HTTP and WS must match.");
+}, 20_000);
+
+async function persistDirtyCanvases() {
+    for (const room of [...liveRooms.values()]) {
+        if (!room.canvasDirty) {
+            continue;
+        }
+        const snapshot = room.canvas;
+        room.canvasDirty = false;
+        try {
+            await prismaClient.room.update({
+                where: { id: room.id },
+                data: {
+                    canvas: JSON.parse(JSON.stringify(snapshot)) as Prisma.InputJsonValue,
+                },
+            });
+            const live = getLiveRoom(room.id);
+            if (live && live.canvas !== snapshot) {
+                live.canvasDirty = true;
+            }
+        } catch (error) {
+            console.error("Error saving canvas:", error);
+            const live = getLiveRoom(room.id);
+            if (live) {
+                live.canvasDirty = true;
+            }
+        }
     }
-});
+}
+
+/** A restart drops every socket, so seat counts and "someone is here" flags in Postgres are stale. */
+async function releaseStaleSeats() {
+    await prismaClient.room.updateMany({
+        where: {
+            expiresAt: { gt: new Date() },
+            OR: [{ seated: { gt: 0 } }, { emptySince: null }],
+        },
+        data: { seated: 0, emptySince: new Date() },
+    });
+}
+
+releaseStaleSeats()
+    .catch((error) => {
+        console.error("Error clearing seats after restart:", error);
+    })
+    .finally(() => {
+        httpServer.listen(port, "0.0.0.0", () => {
+            console.log(`WebSocket backend running on ${port}`);
+            if (!process.env.DATABASE_URL) {
+                console.error("DATABASE_URL is not set; joins will fail");
+            }
+            if (process.env.NODE_ENV !== "production" && !process.env.JWT_SECRET) {
+                console.error("JWT_SECRET is not set; using the development default. HTTP and WS must match.");
+            }
+        });
+    });
+
+setInterval(() => {
+    void persistDirtyCanvases();
+}, CANVAS_SAVE_MS);
 
 setInterval(() => {
     void (async () => {

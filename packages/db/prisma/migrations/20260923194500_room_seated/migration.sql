@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "Room" ADD COLUMN "seated" INTEGER NOT NULL DEFAULT 0;

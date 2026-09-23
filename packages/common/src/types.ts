@@ -167,41 +167,131 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
 
 export type ClientMessage = z.infer<typeof ClientMessageSchema>;
 
-export type PresencePerson = {
-    id: string;
-    name: string;
-    muted: boolean;
-    avatar: number;
-};
+export const PresencePersonSchema = z.object({
+    id: z.string(),
+    name: z.string(),
+    muted: z.boolean(),
+    avatar: z.number(),
+});
+export type PresencePerson = z.infer<typeof PresencePersonSchema>;
 
 /** What the asker sees while their own request is in flight. */
-export type PendingAsk = {
-    requestId: string;
-    slot: MarkerSlot;
-    holderId: string;
-    holderName: string;
-    expiresAt: string;
-};
+export const PendingAskSchema = z.object({
+    requestId: z.string(),
+    slot: MarkerSlotSchema,
+    holderId: z.string(),
+    holderName: z.string(),
+    expiresAt: z.string(),
+});
+export type PendingAsk = z.infer<typeof PendingAskSchema>;
 
-export type AskOutcome = "given" | "kept" | "lapsed";
+export const AskOutcomeSchema = z.enum(["given", "kept", "lapsed"]);
+export type AskOutcome = z.infer<typeof AskOutcomeSchema>;
 
-export type RoomStatePayload = {
-    type: "room_state";
-    slug: string;
-    name: string | null;
-    accessMode: AccessMode;
-    expiresAt: string;
-    hostParticipantId: string;
-    seats: PresencePerson[];
-    waiters: PresencePerson[];
-    markers: [string | null, string | null];
-    usedSeats: number;
-    maxSeats: number;
-    viaFormerSlug: boolean;
-};
+const MarkerSlotsSchema = z.tuple([z.string().nullable(), z.string().nullable()]);
 
-export type ReplayEvent = {
-    t: number;
-    type: string;
-    payload: unknown;
-};
+export const MarkerAskWireSchema = z.object({
+    requestId: z.string(),
+    fromParticipantId: z.string(),
+    fromName: z.string(),
+    fromAvatar: z.number(),
+    slot: MarkerSlotSchema,
+    expiresAt: z.string(),
+});
+
+export const ReplayEventSchema = z.object({
+    t: z.number(),
+    type: z.string(),
+    payload: z.unknown(),
+});
+export type ReplayEvent = z.infer<typeof ReplayEventSchema>;
+
+export const RoomStateSchema = z.object({
+    type: z.literal("room_state"),
+    slug: z.string(),
+    name: z.string().nullable(),
+    accessMode: AccessModeSchema,
+    expiresAt: z.string(),
+    hostParticipantId: z.string(),
+    seats: z.array(PresencePersonSchema),
+    waiters: z.array(PresencePersonSchema),
+    markers: MarkerSlotsSchema,
+    usedSeats: z.number(),
+    maxSeats: z.number(),
+    viaFormerSlug: z.boolean(),
+});
+export type RoomStatePayload = z.infer<typeof RoomStateSchema>;
+
+export const ServerMessageSchema = z.discriminatedUnion("type", [
+    z.object({ type: z.literal("hello"), authed: z.boolean() }),
+    z.object({ type: z.literal("auth_error"), message: z.string() }),
+    z.object({ type: z.literal("error"), message: z.string() }),
+    z.object({ type: z.literal("joined"), slug: z.string() }),
+    z.object({ type: z.literal("waiting") }),
+    z.object({ type: z.literal("denied"), message: z.string() }),
+    z.object({ type: z.literal("full"), message: z.string() }),
+    z.object({ type: z.literal("expired"), message: z.string() }),
+    z.object({ type: z.literal("missing"), message: z.string() }),
+    z.object({ type: z.literal("left") }),
+    z.object({
+        type: z.literal("participant_left"),
+        participantId: z.string(),
+    }),
+    z.object({
+        type: z.literal("participant_joined"),
+        participant: PresencePersonSchema,
+    }),
+    RoomStateSchema,
+    z.object({ type: z.literal("marker_state"), slots: MarkerSlotsSchema }),
+    z.object({ type: z.literal("marker_ack"), slots: MarkerSlotsSchema }),
+    z.object({
+        type: z.literal("marker_asks"),
+        asks: z.array(MarkerAskWireSchema),
+    }),
+    z.object({
+        type: z.literal("marker_ask_state"),
+        ask: PendingAskSchema.nullable(),
+    }),
+    z.object({
+        type: z.literal("marker_ask_done"),
+        slot: MarkerSlotSchema,
+        outcome: AskOutcomeSchema,
+    }),
+    z.object({
+        type: z.literal("slug_rotated"),
+        slug: z.string(),
+        formerSlug: z.string(),
+    }),
+    z.object({
+        type: z.literal("knock"),
+        participant: PresencePersonSchema,
+    }),
+    z.object({ type: z.literal("canvas_snapshot"), payload: z.unknown() }),
+    z.object({ type: z.literal("canvas"), payload: z.unknown() }),
+    z.object({ type: z.literal("canvas_ack") }),
+    z.object({
+        type: z.literal("cursor"),
+        participantId: z.string(),
+        name: z.string(),
+        x: z.number(),
+        y: z.number(),
+        tool: z.enum(["pointer", "laser"]),
+        button: z.enum(["up", "down"]),
+    }),
+    z.object({ type: z.literal("force_mute") }),
+    z.object({
+        type: z.literal("reaction"),
+        id: z.string(),
+        participantId: z.string(),
+        emoji: z.string(),
+    }),
+    z.object({
+        type: z.literal("replay"),
+        version: z.number(),
+        startedAt: z.string(),
+        slug: z.string(),
+        events: z.array(ReplayEventSchema),
+    }),
+]);
+
+export type ServerMessage = z.infer<typeof ServerMessageSchema>;
