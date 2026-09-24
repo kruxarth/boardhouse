@@ -4,7 +4,14 @@ import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import styles from "./landing.module.css";
 import { ClaimTable } from "../components/ClaimTable";
-import { Facade, MarkerFilters, Roof, TrayMarkers } from "../components/HouseArt";
+import {
+    Facade,
+    LeftoverGame,
+    MarkerFilters,
+    Roof,
+    TrayMarkers,
+    type TrayMood,
+} from "../components/HouseArt";
 import { HouseWindow, LoadingWindow } from "../components/HouseWindow";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
@@ -32,6 +39,7 @@ export default function Home() {
     const [claimingSlug, setClaimingSlug] = useState<string | null>(null);
     const [wipingSlug, setWipingSlug] = useState<string | null>(null);
     const [settled, setSettled] = useState(false);
+    const [mood, setMood] = useState<TrayMood>(null);
 
     useEffect(() => {
         installAudioPrime();
@@ -97,6 +105,7 @@ export default function Home() {
             : firstEmpty
         : -1;
     const walk = link.trim().length > 0;
+    const someoneSeated = tables?.some((table) => !table.empty && table.seated > 0) ?? false;
     const sitDisabled = pending || !ready || houseFull || firstEmpty < 0;
 
     async function openTable(payload: { name?: string; tableName: string }) {
@@ -200,6 +209,7 @@ export default function Home() {
                     onEmpty={() => beginClaim()}
                     onOccupied={(slug) => router.push(`/room/${slug}?knock=1`)}
                     onUnused={(slug) => beginClaim(slug)}
+                    onMood={setMood}
                     selected={offset === claimIndex}
                     table={table}
                     wiping={!table.empty && table.slug === wipingSlug}
@@ -236,6 +246,7 @@ export default function Home() {
 
                 <main className={styles.stage}>
                     <p className={styles.note}>10 seats a table. 2 markers. Wiped after 24h.</p>
+                    <LeftoverGame />
                     {houseDown ? (
                         <div className={styles.locked} role="alert">
                             <p className={styles.lockedTitle}>The house isn&apos;t answering.</p>
@@ -246,7 +257,7 @@ export default function Home() {
                         </div>
                     ) : (
                         <div className={styles.house}>
-                            <Roof />
+                            <Roof hearth={someoneSeated ? "smoke" : "asleep"} />
                             <div className={styles.walls}>
                                 <Facade />
                                 <ol aria-label="Tables" className={styles.grid}>
@@ -271,7 +282,7 @@ export default function Home() {
                         </div>
                     ) : null}
                     <div className={styles.ledge}>
-                        <TrayMarkers />
+                        <TrayMarkers mood={claiming ? "hold" : mood} />
                         <p
                             className={error ? `${styles.message} ${styles.error}` : styles.message}
                             role={error ? "alert" : undefined}
@@ -293,6 +304,10 @@ export default function Home() {
                                 <button
                                     className={styles.primary}
                                     disabled={!walk && sitDisabled}
+                                    onBlur={() => setMood(null)}
+                                    onFocus={() => setMood(walk ? "knock" : "sit")}
+                                    onPointerEnter={() => setMood(walk ? "knock" : "sit")}
+                                    onPointerLeave={() => setMood(null)}
                                     type="submit"
                                 >
                                     {walk ? "Walk in" : "Sit down"}

@@ -2,15 +2,25 @@
 
 import styles from "../app/landing.module.css";
 import type { HouseTable } from "../lib/api";
-import { Smudge, WindowOutline } from "./HouseArt";
+import { Smudge, WindowDoodle, WindowOutline, wobble, type TrayMood } from "./HouseArt";
 
 function classes(...names: (string | false | undefined)[]) {
     return names.filter(Boolean).join(" ");
 }
 
+// No two windows hang quite level.
+function hangStyle(index: number) {
+    return {
+        "--i": index,
+        "--tilt": `${wobble(index * 5, 0.9)}deg`,
+        "--nudge-x": `${wobble(index * 7, 1.6)}px`,
+        "--nudge-y": `${wobble(index * 11, 1.6)}px`,
+    } as React.CSSProperties;
+}
+
 export function LoadingWindow({ index }: { index: number }) {
     return (
-        <div className={classes(styles.win, styles.loading)}>
+        <div className={classes(styles.win, styles.loading)} style={hangStyle(index)}>
             <WindowOutline index={index} tone="ghost" />
         </div>
     );
@@ -25,6 +35,7 @@ export function HouseWindow({
     onEmpty,
     onUnused,
     onOccupied,
+    onMood,
 }: {
     index: number;
     table: HouseTable;
@@ -34,8 +45,15 @@ export function HouseWindow({
     onEmpty: () => void;
     onUnused: (slug: string) => void;
     onOccupied: (slug: string) => void;
+    onMood: (mood: TrayMood) => void;
 }) {
-    const style = { "--i": index } as React.CSSProperties;
+    const style = hangStyle(index);
+    const moodEvents = (mood: TrayMood) => ({
+        onPointerEnter: () => onMood(mood),
+        onPointerLeave: () => onMood(null),
+        onFocus: () => onMood(mood),
+        onBlur: () => onMood(null),
+    });
 
     if (table.empty) {
         return (
@@ -45,6 +63,7 @@ export function HouseWindow({
                 disabled={disabled}
                 onClick={onEmpty}
                 style={style}
+                {...moodEvents("sit")}
                 type="button"
             >
                 <WindowOutline index={index} tone="dark" />
@@ -72,6 +91,7 @@ export function HouseWindow({
                 disabled={disabled}
                 onClick={() => onUnused(table.slug)}
                 style={style}
+                {...moodEvents("quiet")}
                 type="button"
             >
                 <WindowOutline index={index} tone="ghost" />
@@ -94,8 +114,10 @@ export function HouseWindow({
             onClick={() => onOccupied(table.slug)}
             style={style}
             type="button"
+            {...moodEvents("knock")}
         >
             <WindowOutline index={index} tone="pink" />
+            <WindowDoodle live={table.seated > 0} seed={table.slug} />
             <span className={styles.words}>
                 <span className={styles.title}>{title}</span>
                 <span className={styles.host}>Host {host}</span>
