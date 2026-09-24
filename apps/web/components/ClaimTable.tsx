@@ -1,80 +1,81 @@
 "use client";
 
 import { useState } from "react";
+import styles from "../app/landing.module.css";
 
 export function ClaimTable({
     needName,
     pending,
     unused,
+    tableNumber,
     onSubmit,
     onCancel,
 }: {
     needName: boolean;
     pending?: boolean;
     unused?: boolean;
+    tableNumber: number | null;
     onSubmit: (payload: { name?: string; tableName: string }) => void;
     onCancel: () => void;
 }) {
     const [name, setName] = useState("");
     const [tableName, setTableName] = useState("");
+    const ready = tableName.trim().length > 0 && (!needName || name.trim().length >= 2);
 
     return (
         <form
-            className="wb-form"
+            className={styles.claim}
+            onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                    onCancel();
+                }
+            }}
             onSubmit={(event) => {
                 event.preventDefault();
+                if (!ready) {
+                    return;
+                }
                 const sitting = tableName.trim();
-                const person = name.trim();
-                if (sitting.length < 1) {
-                    return;
-                }
-                if (needName && person.length < 2) {
-                    return;
-                }
-                onSubmit(needName ? { name: person, tableName: sitting } : { tableName: sitting });
+                onSubmit(needName ? { name: name.trim(), tableName: sitting } : { tableName: sitting });
             }}
         >
-            {unused ? (
-                <p className="wb-warn">
-                    Claiming this table wipes the previous host&apos;s board. Their drawing is deleted.
-                </p>
-            ) : null}
-            <label className="sr-only" htmlFor="table-name">
-                Name this table
-            </label>
-            <input
-                autoFocus
-                className="wb-input"
-                id="table-name"
-                maxLength={40}
-                minLength={1}
-                name="table-name"
-                onChange={(event) => setTableName(event.target.value)}
-                placeholder="Name this table"
-                value={tableName}
-            />
-            {needName ? (
-                <>
-                    <label className="sr-only" htmlFor="host-name">
-                        Your name
-                    </label>
+            <p className={styles.claimHead}>
+                {unused ? "Claim" : "Sit at"} {tableNumber ? `table ${tableNumber}` : "a table"}
+                {unused ? <span className={styles.claimWarn}>This wipes the old board for good.</span> : null}
+            </p>
+            <div className={styles.fields}>
+                <label className={styles.field}>
+                    <span>Name this table</span>
                     <input
-                        className="wb-input"
-                        id="host-name"
-                        maxLength={24}
-                        minLength={2}
-                        name="display-name"
-                        onChange={(event) => setName(event.target.value)}
-                        placeholder="Your name"
-                        value={name}
+                        autoFocus
+                        className={styles.input}
+                        maxLength={40}
+                        name="table-name"
+                        onChange={(event) => setTableName(event.target.value)}
+                        placeholder="Sprint plan"
+                        value={tableName}
                     />
-                </>
-            ) : null}
-            <div className="wb-actions">
-                <button className="wb-primary" disabled={pending} type="submit">
-                    {unused ? "Claim and wipe" : "Sit down"}
+                </label>
+                {needName ? (
+                    <label className={styles.field}>
+                        <span>Your name</span>
+                        <input
+                            className={styles.input}
+                            maxLength={24}
+                            minLength={2}
+                            name="display-name"
+                            onChange={(event) => setName(event.target.value)}
+                            placeholder="At least 2 letters"
+                            value={name}
+                        />
+                    </label>
+                ) : null}
+            </div>
+            <div className={styles.actions}>
+                <button className={styles.primary} disabled={pending || !ready} type="submit">
+                    {pending ? "Opening…" : unused ? "Claim and wipe" : "Sit down"}
                 </button>
-                <button className="wb-cancel" onClick={onCancel} type="button">
+                <button className={styles.secondary} disabled={pending} onClick={onCancel} type="button">
                     Cancel
                 </button>
             </div>

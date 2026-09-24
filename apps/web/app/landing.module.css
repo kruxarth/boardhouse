@@ -1,0 +1,781 @@
+/* The landing page is a dry-erase board with the house drawn on it in the two marker inks. */
+
+.page {
+  --board: #f3f6f8;
+  --frame: #b7bec6;
+  --pink: #e23a74;
+  --ink: #1d2946;
+  --ghost: #d6dce2;
+  --gutter: clamp(16px, 3vw, 56px);
+  --note-col: clamp(120px, 11vw, 240px);
+  --hand: var(--font-hand), "Comic Sans MS", cursive;
+
+  display: flex;
+  min-height: 100dvh;
+  padding: clamp(6px, 0.7vw, 14px);
+  background: var(--frame);
+  color: var(--ink);
+  font-family: var(--font-grotesk), "Segoe UI", system-ui, sans-serif;
+}
+
+.defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.board {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  overflow: clip;
+  border-radius: 4px;
+  background: var(--board);
+  box-shadow:
+    inset 0 0 0 1px rgb(29 41 70 / 0.1),
+    inset 0 2px 8px rgb(29 41 70 / 0.08);
+}
+
+/* A single gloss streak where the room light catches the board. */
+.board::before {
+  content: "";
+  position: absolute;
+  top: -30%;
+  right: 12%;
+  width: 14%;
+  height: 80%;
+  background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.75), transparent);
+  transform: rotate(28deg);
+  pointer-events: none;
+}
+
+.header {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: clamp(18px, 2.4vw, 44px) var(--gutter) 0;
+}
+
+.wordmark {
+  margin: 0;
+  font-size: clamp(2.25rem, 3vw + 0.9rem, 4.5rem);
+  font-weight: 700;
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+}
+
+.tagline {
+  margin: 0.55rem 0 0;
+  font-size: clamp(1.02rem, 0.45vw + 0.88rem, 1.35rem);
+}
+
+.count {
+  margin: 0;
+  padding-top: 0.45rem;
+  font-size: clamp(0.98rem, 0.3vw + 0.9rem, 1.2rem);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.stage {
+  position: relative;
+  display: grid;
+  flex: 1;
+  grid-template-columns: var(--note-col) minmax(0, 1fr) var(--note-col);
+  align-items: center;
+  justify-items: center;
+  padding: clamp(12px, 2vw, 32px) var(--gutter) 0;
+}
+
+.note {
+  grid-column: 1;
+  grid-row: 1;
+  justify-self: start;
+  max-width: 11ch;
+  margin: 0;
+  font-family: var(--hand);
+  font-size: clamp(1.2rem, 0.7vw + 0.85rem, 1.9rem);
+  line-height: 1.25;
+  transform: rotate(-4deg);
+}
+
+.house {
+  grid-column: 2;
+  grid-row: 1;
+  width: min(100%, calc((100dvh - 270px) * 1.8));
+  min-width: 0;
+  container-type: inline-size;
+}
+
+.roof,
+.facade {
+  --stroke: 2.8;
+
+  display: block;
+  overflow: visible;
+}
+
+.narrow {
+  display: none;
+}
+
+.roof {
+  width: 100%;
+  height: 19cqi;
+}
+
+.walls {
+  position: relative;
+  margin: 0 5.5%;
+  padding: 3.2cqi 3.2cqi 5cqi;
+}
+
+.facade {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.grid {
+  --stroke: 2.3;
+
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2.4cqi;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.grid > li {
+  min-width: 0;
+}
+
+/* Strokes */
+
+.ink {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: var(--stroke);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: draw var(--dur, 0.3s) ease-out var(--delay, 0s) forwards;
+  transition: stroke-width 140ms ease;
+}
+
+.drawRoof {
+  --dur: 0.36s;
+}
+
+.drawChimney {
+  --dur: 0.14s;
+  --delay: 0.3s;
+}
+
+.drawFacade {
+  --dur: 0.32s;
+  --delay: 0.36s;
+}
+
+.drawGround {
+  --dur: 0.2s;
+  --delay: 0.56s;
+}
+
+.drawWindow {
+  --dur: 0.2s;
+  --delay: calc(0.66s + var(--i) * 0.035s);
+}
+
+.pink {
+  stroke: var(--pink);
+}
+
+.ghost {
+  stroke: var(--ghost);
+}
+
+/* Dashes are in path units (pathLength=1) so every window gets the same count. */
+.dark {
+  stroke-dasharray: 0.026 0.024;
+  stroke-dashoffset: 0;
+  animation: none;
+}
+
+.empty .outline {
+  clip-path: inset(0 100% 0 0);
+  animation: reveal 0.2s ease-out calc(0.66s + var(--i) * 0.035s) forwards;
+}
+
+@keyframes draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+@keyframes reveal {
+  to {
+    clip-path: inset(0 0 0 0);
+  }
+}
+
+@keyframes fade {
+  to {
+    opacity: 1;
+  }
+}
+
+/* Windows */
+
+.win {
+  position: relative;
+  display: grid;
+  width: 100%;
+  aspect-ratio: 5 / 4;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  text-align: center;
+  cursor: pointer;
+}
+
+.win:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.win:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 4px;
+}
+
+.win:hover:not(:disabled) .ink,
+.win:focus-visible .ink,
+.selected .ink {
+  stroke-width: calc(var(--stroke) * 1.75);
+}
+
+.outline,
+.smudge {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.smudge {
+  inset: 14% 8%;
+  width: 84%;
+  height: 72%;
+}
+
+.smudge path {
+  fill: none;
+  stroke: var(--ghost);
+  stroke-width: 16;
+  stroke-linecap: round;
+  opacity: 0.8;
+}
+
+.words {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25em;
+  max-width: 100%;
+  padding: 0 10%;
+  font-family: var(--hand);
+  opacity: 0;
+  animation: fade 0.3s ease-out calc(0.86s + var(--i) * 0.035s) forwards;
+}
+
+.title,
+.residue {
+  display: -webkit-box;
+  max-width: 100%;
+  overflow: hidden;
+  font-size: clamp(1.05rem, 2.2cqi, 2.6rem);
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.title {
+  color: var(--pink);
+}
+
+.host {
+  font-size: clamp(0.98rem, 1.45cqi, 1.7rem);
+}
+
+.sit {
+  font-size: clamp(1.05rem, 1.8cqi, 2.1rem);
+}
+
+.residue {
+  color: #c2c9d1;
+  filter: blur(0.7px);
+}
+
+.claimNote {
+  font-size: clamp(0.98rem, 1.45cqi, 1.7rem);
+  text-wrap: balance;
+}
+
+.quietTime {
+  font-family: var(--font-grotesk), system-ui, sans-serif;
+  font-size: clamp(0.8rem, 1cqi, 1.15rem);
+  font-weight: 500;
+}
+
+.loading {
+  opacity: 0.7;
+}
+
+.eraser {
+  position: absolute;
+  top: 34%;
+  left: -38%;
+  width: 36%;
+  height: 32%;
+  border-radius: 4px;
+  background: linear-gradient(to bottom, var(--ink) 70%, var(--ghost) 70%);
+  animation: swipe 0.5s ease-in-out forwards;
+}
+
+.wiping .words,
+.wiping .smudge {
+  animation: wipeOut 0.5s ease-in forwards;
+}
+
+@keyframes swipe {
+  to {
+    transform: translateX(390%);
+  }
+}
+
+@keyframes wipeOut {
+  from {
+    opacity: 1;
+    clip-path: inset(0 0 0 0);
+  }
+  to {
+    opacity: 0;
+    clip-path: inset(0 0 0 100%);
+  }
+}
+
+/* Locked house */
+
+.locked {
+  grid-column: 2;
+  grid-row: 1;
+  max-width: 34rem;
+  padding: 1.5rem 1.75rem;
+  border-left: 5px solid var(--pink);
+  font-size: 1.1rem;
+  line-height: 1.5;
+}
+
+.locked p {
+  margin: 0;
+}
+
+.lockedTitle {
+  font-family: var(--hand);
+  font-size: clamp(1.5rem, 1.2vw + 1rem, 2.2rem);
+  line-height: 1.2;
+}
+
+/* Marker tray */
+
+.tray {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin-top: clamp(14px, 2vw, 28px);
+  border-top: 1px solid rgb(255 255 255 / 0.65);
+  background: var(--frame);
+  box-shadow:
+    0 -1px 0 rgb(29 41 70 / 0.14),
+    0 -6px 16px rgb(29 41 70 / 0.07);
+  padding: 0 var(--gutter) env(safe-area-inset-bottom);
+}
+
+.ledge {
+  display: flex;
+  align-items: center;
+  gap: clamp(12px, 1.6vw, 28px);
+  min-height: 68px;
+  padding: 12px 0;
+}
+
+.trayArt {
+  flex: none;
+  width: clamp(130px, 11vw, 190px);
+}
+
+.message {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-size: 0.98rem;
+  line-height: 1.4;
+}
+
+.error {
+  padding: 0.4rem 0.7rem;
+  border-left: 4px solid var(--pink);
+  border-radius: 3px;
+  background: var(--board);
+  font-weight: 600;
+}
+
+.linkForm {
+  display: flex;
+  flex: 0 1 30rem;
+  gap: 10px;
+  min-width: 0;
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  padding: 0 12px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: var(--board);
+  color: var(--ink);
+  font-size: 1rem;
+}
+
+.input::placeholder {
+  color: #5b6478;
+}
+
+.input:focus-visible,
+.primary:focus-visible,
+.secondary:focus-visible {
+  outline: 3px solid var(--pink);
+  outline-offset: 2px;
+}
+
+.primary,
+.secondary {
+  flex: none;
+  height: 44px;
+  padding: 0 20px;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.primary {
+  border: 0;
+  background: var(--ink);
+  color: var(--board);
+}
+
+.primary:hover:not(:disabled) {
+  opacity: 0.9;
+}
+
+.secondary {
+  border: 1.5px solid var(--ink);
+  background: transparent;
+  color: var(--ink);
+}
+
+.primary:disabled,
+.secondary:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* The claim form opens out of the tray, above the ledge. */
+
+.trayPanel {
+  padding: 16px 0 14px;
+  border-bottom: 1px solid rgb(29 41 70 / 0.16);
+  animation: rise 0.18s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.claim {
+  display: grid;
+  grid-template-columns: minmax(12rem, auto) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px 24px;
+}
+
+.claimHead {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  align-self: center;
+}
+
+.claimWarn {
+  padding-left: 0.55rem;
+  border-left: 4px solid var(--pink);
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.fields {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+
+.field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.field .input {
+  flex: none;
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+}
+
+/* Narrower desktops: the note moves under the heading so the house can use the width. */
+@media (max-width: 1100px) {
+  .stage {
+    grid-template-columns: minmax(0, 1fr);
+    align-content: center;
+    row-gap: 12px;
+  }
+
+  .ledge {
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+
+  .linkForm {
+    flex: 1 1 22rem;
+  }
+
+  .message {
+    flex: 1 1 100%;
+    order: 3;
+  }
+
+  .note {
+    max-width: none;
+    font-size: clamp(1.15rem, 1vw + 0.8rem, 1.5rem);
+    transform: rotate(-1.5deg);
+  }
+
+  .house,
+  .locked {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  .claim {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .claimHead {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 6px;
+  }
+
+  .header {
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .count {
+    padding-top: 0;
+  }
+
+  .house {
+    width: 100%;
+  }
+
+  .roof {
+    height: 30cqi;
+  }
+
+  .walls {
+    margin: 0 4%;
+    padding: 4.5cqi 4.5cqi 7cqi;
+  }
+
+  .wide {
+    display: none;
+  }
+
+  .narrow {
+    display: block;
+  }
+
+  .roof,
+  .facade {
+    --stroke: 7;
+  }
+
+  .grid {
+    --stroke: 2.1;
+
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4.5cqi;
+  }
+
+  .title,
+  .residue {
+    font-size: clamp(1.05rem, 5.2cqi, 1.5rem);
+  }
+
+  .host,
+  .claimNote,
+  .sit {
+    font-size: clamp(1rem, 4.2cqi, 1.25rem);
+  }
+
+  .quietTime {
+    font-size: 0.82rem;
+  }
+
+  .trayArt {
+    display: none;
+  }
+
+  .ledge {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 0;
+  }
+
+  .message {
+    font-size: 0.92rem;
+  }
+
+  .linkForm {
+    flex: none;
+    flex-direction: column;
+  }
+
+  .input {
+    flex: none;
+  }
+
+  .primary,
+  .secondary {
+    width: 100%;
+  }
+
+  .claim,
+  .fields {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .claimHead {
+    align-self: stretch;
+  }
+
+  .trayPanel {
+    padding-top: 14px;
+  }
+}
+
+/* After the first draw, strokes and words stay put. */
+.settled .ink,
+.settled .empty .outline,
+.settled .words {
+  animation: none;
+}
+
+.settled .ink {
+  stroke-dashoffset: 0;
+}
+
+.settled .dark {
+  stroke-dasharray: 0.026 0.024;
+}
+
+.settled .empty .outline {
+  clip-path: none;
+}
+
+.settled .words {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ink,
+  .empty .outline,
+  .words,
+  .trayPanel {
+    animation: none;
+  }
+
+  .ink {
+    stroke-dashoffset: 0;
+  }
+
+  .dark {
+    stroke-dasharray: 0.026 0.024;
+  }
+
+  .empty .outline {
+    clip-path: none;
+  }
+
+  .words {
+    opacity: 1;
+  }
+
+  .ink {
+    transition: none;
+  }
+}
