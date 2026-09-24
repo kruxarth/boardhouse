@@ -178,4 +178,12 @@ describe("mergeCanvas", () => {
         expect(versions.get("c")).toBe(1);
         expect(Object.keys(merged.files).sort()).toEqual(["next", "old"]);
     });
+
+    it("breaks a version tie with the lower versionNonce, whichever side sent it", () => {
+        const low = { id: "a", version: 2, versionNonce: 10, index: "a0" };
+        const high = { id: "a", version: 2, versionNonce: 90, index: "a0" };
+
+        expect(mergeCanvas({ elements: [high] }, { elements: [low] }).elements).toEqual([low]);
+        expect(mergeCanvas({ elements: [low] }, { elements: [high] }).elements).toEqual([low]);
+    });
 });

@@ -105,25 +105,32 @@ function elementVersion(element: unknown) {
     if (!element || typeof element !== "object") {
         return null;
     }
-    const record = element as { id?: unknown; version?: unknown; index?: unknown };
+    const record = element as {
+        id?: unknown;
+        version?: unknown;
+        versionNonce?: unknown;
+        index?: unknown;
+    };
     if (typeof record.id !== "string" || record.id.length === 0) {
         return null;
     }
     return {
         id: record.id,
         version: typeof record.version === "number" ? record.version : 0,
+        nonce: typeof record.versionNonce === "number" ? record.versionNonce : 0,
         index: typeof record.index === "string" ? record.index : null,
     };
 }
 
 /**
- * Keep, for each element id, the copy with the highest version.
+ * Keep, for each element id, the copy with the highest version. On a tie the lower
+ * versionNonce wins, which is how Excalidraw's reconcileElements settles it on clients.
  * Order follows Excalidraw's fractional index when both sides have one.
  */
 export function mergeElements(base: unknown[], incoming: unknown[]) {
     const byId = new Map<
         string,
-        { element: unknown; version: number; index: string | null; order: number }
+        { element: unknown; version: number; nonce: number; index: string | null; order: number }
     >();
     let order = 0;
     const take = (list: unknown[]) => {
@@ -137,15 +144,20 @@ export function mergeElements(base: unknown[], incoming: unknown[]) {
                 byId.set(read.id, {
                     element,
                     version: read.version,
+                    nonce: read.nonce,
                     index: read.index,
                     order: order++,
                 });
                 continue;
             }
-            if (read.version > prev.version) {
+            const newer =
+                read.version > prev.version ||
+                (read.version === prev.version && read.nonce < prev.nonce);
+            if (newer) {
                 byId.set(read.id, {
                     element,
                     version: read.version,
+                    nonce: read.nonce,
                     index: read.index ?? prev.index,
                     order: prev.order,
                 });
