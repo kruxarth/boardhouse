@@ -11,6 +11,7 @@ import { useVoice } from "../hooks/useVoice";
 import { createSession, fetchRoom, isUnauthorizedError, refreshSession } from "../lib/api";
 import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import { installAudioPrime, primeAudio } from "../lib/sounds";
+import { elapsedLabel, WAKE_BUDGET_MS } from "../lib/wake";
 import type { BoardHandle, RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
@@ -24,16 +25,6 @@ import {
     type PendingAsk,
     type TableModel,
 } from "./TableShell";
-
-function waitedLabel(ms: number) {
-    const seconds = Math.max(0, Math.floor(ms / 1000));
-    const minutes = Math.floor(seconds / 60);
-    const rest = seconds % 60;
-    if (minutes <= 0) {
-        return `${rest}s`;
-    }
-    return `${minutes}m ${rest}s`;
-}
 
 export function TableRoom({
     slug,
@@ -68,7 +59,9 @@ export function TableRoom({
     const hostKey = hostKeyFromUrl || (ready ? readHostKey(slug) : null);
     const [joinToken, setJoinToken] = useState<string | null>(null);
     const preparedTokenRef = useRef<string | null>(null);
-    const { socket, loading, failed } = useSocket(joinToken);
+    const { socket, loading, failed, waking: lineWaking } = useSocket(joinToken);
+    const [roomWaking, setRoomWaking] = useState(false);
+    const [wakeSince, setWakeSince] = useState(0);
     const joined = door === "joined";
     const reconnecting = joined && !failed && (loading || !socket);
     const voice = useVoice({
@@ -149,7 +142,7 @@ export function TableRoom({
     useEffect(() => {
         if (failed) {
             setDoor("error");
-            setDoorMessage("Could not reach the table line.");
+            setDoorMessage("The table line didn't answer for a few minutes. Try again in a moment.");
         }
     }, [failed]);
 
@@ -210,23 +203,41 @@ export function TableRoom({
     }, [ready, session, setSession]);
 
     useEffect(() => {
+        const asleep = lineWaking || roomWaking;
+        setWakeSince((current) => (asleep ? current || Date.now() : 0));
+    }, [lineWaking, roomWaking]);
+
+    useEffect(() => {
         let cancelled = false;
-        fetchRoom(slug).then((result) => {
+        let retryTimer: number | undefined;
+        const started = Date.now();
+        async function look() {
+            const result = await fetchRoom(slug);
             if (cancelled) {
                 return;
             }
-            if (!result.ok) {
-                setDoor((current) =>
-                    current === "joined" || current === "waiting"
-                        ? current
-                        : result.status === "error"
-                          ? "error"
-                          : result.status
-                );
+            if (result.ok) {
+                setRoomWaking(false);
+                return;
             }
-        });
+            if (result.status === "error" && Date.now() - started < WAKE_BUDGET_MS) {
+                setRoomWaking(true);
+                retryTimer = window.setTimeout(() => void look(), 3_000);
+                return;
+            }
+            setRoomWaking(false);
+            setDoor((current) =>
+                current === "joined" || current === "waiting"
+                    ? current
+                    : result.status === "error"
+                      ? "error"
+                      : result.status
+            );
+        }
+        void look();
         return () => {
             cancelled = true;
+            window.clearTimeout(retryTimer);
         };
     }, [slug]);
 
@@ -341,7 +352,7 @@ export function TableRoom({
                               : `${inside} people are inside.`}
                     </p>
                     <p className="door-kicker">
-                        Waiting {waitStarted ? waitedLabel(now - waitStarted) : "0s"}.
+                        Waiting {waitStarted ? elapsedLabel(now - waitStarted) : "0s"}.
                     </p>
                     {knockNote ? <p className="door-kicker">{knockNote}</p> : null}
                     <div className="door-actions">
@@ -372,11 +383,31 @@ export function TableRoom({
         );
     }
 
+    if ((door === "connecting" || door === "joined") && !joined && wakeSince) {
+        return (
+            <DoorScreen
+                title="The house is waking up"
+                body="It naps when nobody's around. Getting up can take a minute or two."
+            >
+                <p className="door-kicker">Waiting {elapsedLabel(now - wakeSince)}.</p>
+            </DoorScreen>
+        );
+    }
+
     if (door !== "joined" || !session) {
         const copyForDoor = doorCopy(door === "joined" ? "connecting" : door);
         return (
             <DoorScreen title={copyForDoor.title} body={doorMessage || copyForDoor.body}>
-                {door === "denied" || door === "missing" || door === "expired" || door === "full" || door === "error" ? (
+                {door === "error" ? (
+                    <div className="door-actions">
+                        <button className="btn btn-brass" onClick={() => window.location.reload()} type="button">
+                            Try again
+                        </button>
+                        <Link className="btn btn-ghost" href="/">
+                            Back to the house
+                        </Link>
+                    </div>
+                ) : door === "denied" || door === "missing" || door === "expired" || door === "full" ? (
                     <Link className="btn btn-brass" href="/">
                         Back to the house
                     </Link>

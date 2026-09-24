@@ -10,6 +10,7 @@ import { useLocalSession } from "../hooks/useLocalSession";
 import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
 import { installAudioPrime, primeAudio } from "../lib/sounds";
+import { elapsedLabel, nudgeTableLine, WAKE_BUDGET_MS } from "../lib/wake";
 
 const TABLES = 10;
 
@@ -22,6 +23,8 @@ export default function Home() {
     const { session, setSession, ready } = useLocalSession();
     const [occupancy, setOccupancy] = useState<Occupancy | null>(null);
     const [houseDown, setHouseDown] = useState(false);
+    const [wakeSince, setWakeSince] = useState(0);
+    const [now, setNow] = useState(0);
     const [link, setLink] = useState("");
     const [error, setError] = useState("");
     const [pending, setPending] = useState(false);
@@ -40,28 +43,49 @@ export default function Home() {
         return () => window.clearTimeout(timer);
     }, []);
 
+    // A cold start fails requests for a while; only call the house down once waking has run out of time.
     useEffect(() => {
         let cancelled = false;
+        let timer: number | undefined;
+        let failingSince = 0;
         async function load() {
             try {
                 const next = await fetchOccupancy();
-                if (!cancelled) {
-                    setOccupancy(next);
-                    setHouseDown(false);
+                if (cancelled) {
+                    return;
                 }
+                failingSince = 0;
+                setOccupancy(next);
+                setHouseDown(false);
+                setWakeSince(0);
+                timer = window.setTimeout(() => void load(), 8_000);
             } catch {
-                if (!cancelled) {
-                    setHouseDown(true);
+                if (cancelled) {
+                    return;
                 }
+                failingSince ||= Date.now();
+                const down = Date.now() - failingSince > WAKE_BUDGET_MS;
+                setHouseDown(down);
+                setWakeSince(down ? 0 : failingSince);
+                timer = window.setTimeout(() => void load(), down ? 15_000 : 3_000);
             }
         }
+        nudgeTableLine();
         void load();
-        const timer = window.setInterval(() => void load(), 8_000);
         return () => {
             cancelled = true;
-            window.clearInterval(timer);
+            window.clearTimeout(timer);
         };
     }, []);
+
+    useEffect(() => {
+        if (!wakeSince) {
+            return;
+        }
+        setNow(Date.now());
+        const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+        return () => window.clearInterval(timer);
+    }, [wakeSince]);
 
     const tables = occupancy?.tables ?? null;
     const quietOpen = tables?.some((table) => !table.empty && table.unused) ?? false;
@@ -184,9 +208,11 @@ export default function Home() {
         );
     }
 
-    const hint = houseFull
-        ? "Every table is taken. A table frees up when it's been quiet for 10 minutes."
-        : "Knock on a pink table to join it, or sit at an empty one to host.";
+    const hint = wakeSince
+        ? `The house naps when nobody's around. Waking it up can take a minute or two. Waiting ${elapsedLabel(now - wakeSince)}.`
+        : houseFull
+          ? "Every table is taken. A table frees up when it's been quiet for 10 minutes."
+          : "Knock on a pink table to join it, or sit at an empty one to host.";
 
     return (
         <div className={settled ? `${styles.page} ${styles.settled}` : styles.page}>
@@ -202,7 +228,9 @@ export default function Home() {
                             ? `${occupancy.used} of ${occupancy.max} tables in use`
                             : houseDown
                               ? "House unreachable"
-                              : "Counting tables…"}
+                              : wakeSince
+                                ? "Waking up the house…"
+                                : "Counting tables…"}
                     </p>
                 </header>
 
@@ -210,8 +238,11 @@ export default function Home() {
                     <p className={styles.note}>10 seats a table. 2 markers. Wiped after 24h.</p>
                     {houseDown ? (
                         <div className={styles.locked} role="alert">
-                            <p className={styles.lockedTitle}>The house is locked from this site.</p>
-                            <p>Check FRONTEND_URL on the HTTP server, then reload.</p>
+                            <p className={styles.lockedTitle}>The house isn&apos;t answering.</p>
+                            <p>
+                                It may still be waking up. If this lasts, check that the HTTP server is running and
+                                that FRONTEND_URL on it includes this site, then reload.
+                            </p>
                         </div>
                     ) : (
                         <div className={styles.house}>
