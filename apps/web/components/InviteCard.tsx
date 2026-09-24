@@ -48,7 +48,7 @@ export function InviteCard({
                     dangerouslySetInnerHTML={{ __html: svg }}
                 />
             ) : null}
-            <button className="btn btn-brass invite-copy" onClick={onCopy} type="button">
+            <button className="invite-button" onClick={onCopy} type="button">
                 Copy invite link
             </button>
         </aside>

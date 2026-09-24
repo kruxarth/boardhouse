@@ -1,22 +1,11 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
-import { Figtree, Fraunces, Schibsted_Grotesk } from "next/font/google";
+import { Schibsted_Grotesk } from "next/font/google";
 import "./globals.css";
-
-const fraunces = Fraunces({
-    subsets: ["latin"],
-    variable: "--font-fraunces",
-});
-
-const figtree = Figtree({
-    subsets: ["latin"],
-    variable: "--font-figtree",
-});
 
 const grotesk = Schibsted_Grotesk({
     subsets: ["latin"],
     variable: "--font-grotesk",
-    weight: ["400", "500", "700"],
 });
 
 const excalifont = localFont({
@@ -28,7 +17,7 @@ const excalifont = localFont({
 
 export const metadata: Metadata = {
     title: "board-house",
-    description: "Ten tables. Closed doors. One day.",
+    description: "Draw together for a day. Then it's wiped.",
 };
 
 export default function RootLayout({
@@ -37,12 +26,8 @@ export default function RootLayout({
     children: React.ReactNode;
 }>) {
     return (
-        <html lang="en">
-            <body
-                className={`${fraunces.variable} ${figtree.variable} ${grotesk.variable} ${excalifont.variable}`}
-            >
-                {children}
-            </body>
+        <html lang="en" className={`${grotesk.variable} ${excalifont.variable}`}>
+            <body>{children}</body>
         </html>
     );
 }
