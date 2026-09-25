@@ -242,6 +242,7 @@ export function TableShell({
 }) {
     const [confirmEnd, setConfirmEnd] = useState(false);
     const [drawerOpen, setDrawerOpen] = useState(false);
+    const [inviteClosed, setInviteClosed] = useState(() => readInviteClosed(table?.slug));
     const [note, setNote] = useState<{ slot: 0 | 1; text: string } | null>(null);
     const isHost = Boolean(table && table.hostParticipantId === me.id);
     const guestUrl = table ? `${typeof window !== "undefined" ? window.location.origin : ""}/room/${table.slug}` : "";
@@ -380,7 +381,7 @@ export function TableShell({
 
     const watching = !canDraw ? watchCopy(table, byId) : null;
     const showWatchHint = Boolean(watching && (!hintDismissed || hintFlash > 0));
-    const alone = isHost && seats.length <= 1;
+    const alone = isHost && seats.length <= 1 && !inviteClosed;
     const graceNames = ([0, 1] as const)
         .filter((slot) => {
             const id = table.markers[slot];
@@ -558,7 +559,13 @@ export function TableShell({
                     onCursor={onCursor}
                 />
                 {alone ? (
-                    <InviteCard url={guestUrl} onCopy={() => onCopy("Invite link", guestUrl)} />
+                    <InviteCard
+                        onClose={() => {
+                            setInviteClosed(true);
+                            rememberInviteClosed(table.slug);
+                        }}
+                        onCopy={() => onCopy("Invite link", guestUrl)}
+                    />
                 ) : null}
                 {showWatchHint && watching ? (
                     <div className="watch-hint" role="status">
@@ -1150,6 +1157,27 @@ function Pen({
             ) : null}
         </div>
     );
+}
+
+const INVITE_CLOSED_KEY = "board-house.invite-closed.";
+
+function readInviteClosed(slug: string | undefined) {
+    if (!slug) {
+        return false;
+    }
+    try {
+        return localStorage.getItem(INVITE_CLOSED_KEY + slug) === "1";
+    } catch {
+        return false;
+    }
+}
+
+function rememberInviteClosed(slug: string) {
+    try {
+        localStorage.setItem(INVITE_CLOSED_KEY + slug, "1");
+    } catch {
+        // Closing still works for this visit.
+    }
 }
 
 export function doorCopy(kind: DoorKind): { title: string; body: string } {
