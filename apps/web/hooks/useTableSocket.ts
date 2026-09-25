@@ -214,6 +214,7 @@ export function useTableSocket({
             }
             const parsed = ServerMessageSchema.safeParse(payload);
             if (!parsed.success) {
+                console.warn("Dropped a table message this page can't read", payload, parsed.error.issues);
                 return;
             }
             const message = parsed.data;

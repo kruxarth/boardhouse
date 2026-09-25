@@ -204,6 +204,7 @@ export function TableRoom({
     }, [ready, session, setSession]);
 
     const [connectingSince, setConnectingSince] = useState(0);
+    const [joinedSince, setJoinedSince] = useState(0);
     const [lookingSince, setLookingSince] = useState(0);
     const [namingSince, setNamingSince] = useState(0);
     const slow = (since: number) => since > 0 && now - since > SLOW_MS;
@@ -216,6 +217,7 @@ export function TableRoom({
 
     useEffect(() => {
         setConnectingSince((current) => (door === "connecting" ? current || Date.now() : 0));
+        setJoinedSince((current) => (door === "joined" ? current || Date.now() : 0));
     }, [door]);
 
     useEffect(() => {
@@ -440,6 +442,29 @@ export function TableRoom({
                     </Link>
                 ) : null}
             </DoorScreen>
+        );
+    }
+
+    // Joined but no table state means the server speaks an older protocol than this page.
+    if (!table) {
+        const stuck = joinedSince > 0 && now - joinedSince > 8_000;
+        const connecting = doorCopy("connecting");
+        return stuck ? (
+            <DoorScreen
+                title="The table isn't making sense"
+                body="The door opened but the table never described itself. The server is probably running an older version than this page. Give it a minute, then try again."
+            >
+                <div className="door-actions">
+                    <button className="btn btn-brass" onClick={() => window.location.reload()} type="button">
+                        Try again
+                    </button>
+                    <Link className="btn btn-ghost" href="/">
+                        Back to the house
+                    </Link>
+                </div>
+            </DoorScreen>
+        ) : (
+            <DoorScreen title={connecting.title} body={connecting.body} />
         );
     }
 
