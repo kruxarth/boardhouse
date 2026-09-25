@@ -11,7 +11,7 @@ import { useVoice } from "../hooks/useVoice";
 import { createSession, fetchRoom, isUnauthorizedError, refreshSession } from "../lib/api";
 import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import { installAudioPrime, primeAudio } from "../lib/sounds";
-import { elapsedLabel, WAKE_BUDGET_MS } from "../lib/wake";
+import { elapsedLabel, nudgeTableLine, SLOW_MS, WAKE_BUDGET_MS } from "../lib/wake";
 import type { BoardHandle, RemoteCursor } from "./BoardCanvas";
 import { DoorScreen } from "./DoorScreen";
 import { NameGate } from "./NameGate";
@@ -113,6 +113,7 @@ export function TableRoom({
 
     useEffect(() => {
         installAudioPrime();
+        nudgeTableLine();
     }, []);
 
     useEffect(() => {
@@ -202,20 +203,38 @@ export function TableRoom({
         };
     }, [ready, session, setSession]);
 
+    const [connectingSince, setConnectingSince] = useState(0);
+    const [lookingSince, setLookingSince] = useState(0);
+    const [namingSince, setNamingSince] = useState(0);
+    const slow = (since: number) => since > 0 && now - since > SLOW_MS;
+    const asleep =
+        lineWaking ||
+        roomWaking ||
+        (door === "connecting" && slow(connectingSince)) ||
+        slow(lookingSince) ||
+        slow(namingSince);
+
     useEffect(() => {
-        const asleep = lineWaking || roomWaking;
-        setWakeSince((current) => (asleep ? current || Date.now() : 0));
-    }, [lineWaking, roomWaking]);
+        setConnectingSince((current) => (door === "connecting" ? current || Date.now() : 0));
+    }, [door]);
+
+    useEffect(() => {
+        setWakeSince((current) =>
+            asleep ? current || Math.min(...[connectingSince, lookingSince, namingSince].filter(Boolean), Date.now()) : 0
+        );
+    }, [asleep, connectingSince, lookingSince, namingSince]);
 
     useEffect(() => {
         let cancelled = false;
         let retryTimer: number | undefined;
         const started = Date.now();
         async function look() {
+            setLookingSince((current) => current || Date.now());
             const result = await fetchRoom(slug);
             if (cancelled) {
                 return;
             }
+            setLookingSince(0);
             if (result.ok) {
                 setRoomWaking(false);
                 return;
@@ -252,6 +271,7 @@ export function TableRoom({
     async function handleName(name: string) {
         primeAudio();
         setNamePending(true);
+        setNamingSince(Date.now());
         try {
             const next = await createSession(name);
             preparedTokenRef.current = next.token;
@@ -263,6 +283,7 @@ export function TableRoom({
             setDoorMessage("Could not start a session");
         } finally {
             setNamePending(false);
+            setNamingSince(0);
         }
     }
 
@@ -333,6 +354,12 @@ export function TableRoom({
                     pending={namePending}
                     onSubmit={handleName}
                 />
+                {wakeSince ? (
+                    <p className="door-kicker" role="status">
+                        The house is waking up. It naps when nobody&apos;s around, so this can take a
+                        minute or two. Waiting {elapsedLabel(now - wakeSince)}.
+                    </p>
+                ) : null}
             </DoorScreen>
         );
     }

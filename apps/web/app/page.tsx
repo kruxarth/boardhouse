@@ -17,7 +17,7 @@ import { useLocalSession } from "../hooks/useLocalSession";
 import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
 import { installAudioPrime, primeAudio } from "../lib/sounds";
-import { elapsedLabel, nudgeTableLine, WAKE_BUDGET_MS } from "../lib/wake";
+import { elapsedLabel, nudgeTableLine, SLOW_MS, WAKE_BUDGET_MS } from "../lib/wake";
 
 const TABLES = 10;
 
@@ -57,8 +57,16 @@ export default function Home() {
         let timer: number | undefined;
         let failingSince = 0;
         async function load() {
+            const started = Date.now();
+            const slow = window.setTimeout(() => {
+                if (!cancelled) {
+                    failingSince ||= started;
+                    setWakeSince(failingSince);
+                }
+            }, SLOW_MS);
             try {
                 const next = await fetchOccupancy();
+                window.clearTimeout(slow);
                 if (cancelled) {
                     return;
                 }
@@ -68,10 +76,11 @@ export default function Home() {
                 setWakeSince(0);
                 timer = window.setTimeout(() => void load(), 8_000);
             } catch {
+                window.clearTimeout(slow);
                 if (cancelled) {
                     return;
                 }
-                failingSince ||= Date.now();
+                failingSince ||= started;
                 const down = Date.now() - failingSince > WAKE_BUDGET_MS;
                 setHouseDown(down);
                 setWakeSince(down ? 0 : failingSince);

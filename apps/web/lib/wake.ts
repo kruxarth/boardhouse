@@ -3,6 +3,9 @@ import { WS_BACKEND_URL } from "../app/config";
 // Render's free tier sleeps idle services, and waking one can take a minute or more.
 export const WAKE_BUDGET_MS = 180_000;
 
+// Render holds requests to a sleeping service open until it boots, so slow means waking too.
+export const SLOW_MS = 4_000;
+
 /** Any plain request starts a sleeping service; the reply doesn't matter. */
 export function nudgeTableLine() {
     const url = WS_BACKEND_URL.replace(/^ws/, "http");
