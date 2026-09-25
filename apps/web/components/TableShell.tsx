@@ -741,7 +741,7 @@ function SeatChip({
     const micClass = `seat-mic${live ? " mic-on" : " mic-off"}${speaking ? " seat-mic-speaking" : ""}`;
 
     return (
-        <li className={isMe ? "seat seat-me" : "seat"}>
+        <li className={`seat${isMe ? " seat-me" : ""}${reactions.length > 0 ? " seat-reacting" : ""}`}>
             <span className="seat-face">
                 <Avatar id={seat.id} index={seat.avatar} />
             </span>
