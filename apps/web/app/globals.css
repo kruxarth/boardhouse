@@ -958,6 +958,11 @@ select:focus-visible,
   display: none !important;
 }
 
+/* Excalidraw's help dialog opens with links to its own docs, blog and socials; keep only the shortcuts. */
+.excalidraw .HelpDialog__header {
+  display: none !important;
+}
+
 .board-watch .shapes-section,
 .board-watch .App-toolbar,
 .board-watch .App-toolbar-container,

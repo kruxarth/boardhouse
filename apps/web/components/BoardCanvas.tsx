@@ -879,7 +879,7 @@ export const BoardCanvas = forwardRef<BoardHandle, BoardCanvasProps>(function Bo
                         JSON.stringify({
                             type: "excalidraw",
                             version: 2,
-                            source: "https://excalidraw.com",
+                            source: window.location.origin,
                             elements: liveElements(api),
                             appState: { viewBackgroundColor: BOARD_BACKGROUND },
                             files: api.getFiles(),
