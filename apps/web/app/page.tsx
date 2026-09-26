@@ -13,6 +13,7 @@ import {
     type TrayMood,
 } from "../components/HouseArt";
 import { HouseWindow, LoadingWindow } from "../components/HouseWindow";
+import { WhoAmI } from "../components/WhoAmI";
 import { useLocalSession } from "../hooks/useLocalSession";
 import { claimRoom, createRoom, fetchOccupancy, sessionForSitting, type Occupancy } from "../lib/api";
 import { rememberHostKey, readSession } from "../lib/session";
@@ -242,15 +243,18 @@ export default function Home() {
                         <h1 className={styles.wordmark}>board-house</h1>
                         <p className={styles.tagline}>Draw together for a day. Then it&apos;s wiped.</p>
                     </div>
-                    <p className={styles.count} aria-live="polite">
-                        {occupancy
-                            ? `${occupancy.used} of ${occupancy.max} tables in use`
-                            : houseDown
-                              ? "House unreachable"
-                              : wakeSince
-                                ? "Waking up the house…"
-                                : "Counting tables…"}
-                    </p>
+                    <div className={styles.headerSide}>
+                        <p className={styles.count} aria-live="polite">
+                            {occupancy
+                                ? `${occupancy.used} of ${occupancy.max} tables in use`
+                                : houseDown
+                                  ? "House unreachable"
+                                  : wakeSince
+                                    ? "Waking up the house…"
+                                    : "Counting tables…"}
+                        </p>
+                        {ready && session ? <WhoAmI onSession={setSession} session={session} /> : null}
+                    </div>
                 </header>
 
                 <main className={styles.stage}>

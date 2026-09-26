@@ -10,6 +10,7 @@ import { Avatar } from "./Avatars";
 import {
     AskIcon,
     BootIcon,
+    PencilIcon,
     CloseIcon,
     DownloadIcon,
     DrawerIcon,
@@ -183,6 +184,7 @@ export function TableShell({
     onEnd,
     onMute,
     onKick,
+    onRename,
     onMic,
     onAllowMic,
     onListenOnly,
@@ -231,6 +233,7 @@ export function TableShell({
     onEnd: () => void;
     onMute: (participantId: string) => void;
     onKick: (participantId: string) => void;
+    onRename: (name: string) => Promise<boolean>;
     onMic: () => void;
     onAllowMic: () => void;
     onListenOnly: () => void;
@@ -439,6 +442,7 @@ export function TableShell({
                                 onMic={onMic}
                                 onMute={onMute}
                                 onKick={onKick}
+                                onRename={onRename}
                             />
                             );
                         })}
@@ -729,6 +733,7 @@ function SeatChip({
     onMic,
     onMute,
     onKick,
+    onRename,
 }: {
     seat: PresencePerson;
     isMe: boolean;
@@ -742,6 +747,7 @@ function SeatChip({
     onMic: () => void;
     onMute: (participantId: string) => void;
     onKick: (participantId: string) => void;
+    onRename: (name: string) => Promise<boolean>;
 }) {
     const live = isMe ? micOn : !seat.muted;
     const micClass = `seat-mic${live ? " mic-on" : " mic-off"}${speaking ? " seat-mic-speaking" : ""}`;
@@ -752,7 +758,7 @@ function SeatChip({
                 <Avatar id={seat.id} index={seat.avatar} />
             </span>
             <span className="seat-name">
-                {seat.name}
+                {isMe ? <EditableName name={seat.name} onRename={onRename} /> : seat.name}
                 {isTheHost ? <em className="seat-host">host</em> : null}
                 {drawing ? <em className="seat-drawing">drawing</em> : null}
             </span>
@@ -801,6 +807,73 @@ function SeatChip({
                 ))}
             </span>
         </li>
+    );
+}
+
+/** Your own name on your chip; click it to change what everyone sees. */
+function EditableName({ name, onRename }: { name: string; onRename: (name: string) => Promise<boolean> }) {
+    const [editing, setEditing] = useState(false);
+    const [draft, setDraft] = useState(name);
+    const [pending, setPending] = useState(false);
+
+    if (!editing) {
+        return (
+            <button
+                aria-label={`Your name, ${name}. Change it`}
+                className="seat-name-edit"
+                onClick={() => {
+                    setDraft(name);
+                    setEditing(true);
+                }}
+                title="Change your name"
+                type="button"
+            >
+                {name}
+                <PencilIcon />
+            </button>
+        );
+    }
+
+    return (
+        <form
+            className="seat-rename"
+            onSubmit={async (event) => {
+                event.preventDefault();
+                const next = draft.trim();
+                if (next === name) {
+                    setEditing(false);
+                    return;
+                }
+                if (next.length < 2 || pending) {
+                    return;
+                }
+                setPending(true);
+                const renamed = await onRename(next);
+                setPending(false);
+                if (renamed) {
+                    setEditing(false);
+                }
+            }}
+        >
+            <input
+                aria-label="Your name"
+                autoFocus
+                disabled={pending}
+                maxLength={24}
+                onBlur={() => {
+                    if (!pending) {
+                        setEditing(false);
+                    }
+                }}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                    if (event.key === "Escape") {
+                        setEditing(false);
+                    }
+                }}
+                value={draft}
+            />
+        </form>
     );
 }
 

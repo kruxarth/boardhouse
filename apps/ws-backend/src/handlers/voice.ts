@@ -5,6 +5,7 @@ import type { Connection } from "../connection";
 import {
     broadcastAdmitted,
     broadcastRoomState,
+    readSession,
     requireAdmitted,
     requireHost,
     sendError,
@@ -27,6 +28,27 @@ export async function handleMuteParticipant(connection: Connection, message: Cli
     }
     target.muted = true;
     sendJson(target.ws, { type: "force_mute" });
+    broadcastRoomState(room);
+}
+
+/** The HTTP server re-issued this participant's token with a new name; carry it onto the live seat. */
+export async function handleRename(connection: Connection, message: ClientMessage) {
+    if (message.type !== "rename") {
+        return;
+    }
+    const current = connection.session;
+    const next = readSession(message.token);
+    if (!current || !next || next.participantId !== current.participantId) {
+        sendError(connection.ws, "That name change could not be checked");
+        return;
+    }
+    connection.session = next;
+    const room = connection.room;
+    const seat = room?.admitted.get(next.participantId) ?? room?.waiting.get(next.participantId);
+    if (!room || !seat || seat.ws !== connection.ws) {
+        return;
+    }
+    seat.name = next.name;
     broadcastRoomState(room);
 }
 

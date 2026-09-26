@@ -14,6 +14,20 @@ export function InkStroke({ ink }: { ink: string }) {
     );
 }
 
+export function PencilIcon() {
+    return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
+            <path
+                d="M4 20l1-4.5L15.5 5a2.1 2.1 0 0 1 3 3L8 18.5z M13.5 7l3 3"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinejoin="round"
+            />
+        </svg>
+    );
+}
+
 /** Showing someone out of the table. */
 export function BootIcon() {
     return (

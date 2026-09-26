@@ -111,6 +111,11 @@ export const CursorMessageSchema = z.object({
     button: z.enum(["up", "down"]).optional(),
 });
 
+export const RenameMessageSchema = z.object({
+    type: z.literal("rename"),
+    token: z.string().min(1).max(4_000),
+});
+
 export const KickMessageSchema = z.object({
     type: z.literal("kick"),
     participantId: z.string().min(1).max(100),
@@ -166,6 +171,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     CursorMessageSchema,
     MuteParticipantMessageSchema,
     KickMessageSchema,
+    RenameMessageSchema,
     SetMutedMessageSchema,
     ReactMessageSchema,
     GetReplayMessageSchema,

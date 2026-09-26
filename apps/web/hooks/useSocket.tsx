@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KICKED_CLOSE_CODE } from "@repo/common/constants";
 import { WS_BACKEND_URL } from "../app/config";
 import { WAKE_BUDGET_MS } from "../lib/wake";
@@ -8,14 +8,18 @@ function socketUrl(token: string) {
     return `${base}/?token=${encodeURIComponent(token)}`;
 }
 
-export function useSocket(token: string | null) {
+/** Reconnects only when `identity` changes; a renamed token is picked up on the next reconnect. */
+export function useSocket(token: string | null, identity: string | null) {
+    const tokenRef = useRef(token);
+    tokenRef.current = token;
+    const live = Boolean(token && identity);
     const [loading, setLoading] = useState(true);
     const [socket, setSocket] = useState<WebSocket | null>(null);
     const [failed, setFailed] = useState(false);
     const [waking, setWaking] = useState(false);
 
     useEffect(() => {
-        if (!token) {
+        if (!live) {
             setSocket(null);
             setLoading(true);
             setFailed(false);
@@ -28,14 +32,13 @@ export function useSocket(token: string | null) {
         let attempt = 0;
         let failingSince = 0;
         let retryTimer: number | undefined;
-        const sessionToken = token;
 
         function connect() {
             if (stopped) {
                 return;
             }
 
-            const next = new WebSocket(socketUrl(sessionToken));
+            const next = new WebSocket(socketUrl(tokenRef.current ?? ""));
             ws = next;
 
             next.addEventListener("open", () => {
@@ -99,7 +102,7 @@ export function useSocket(token: string | null) {
             ws?.close();
             setSocket(null);
         };
-    }, [token]);
+    }, [live, identity]);
 
     return { socket, loading, failed, waking };
 }

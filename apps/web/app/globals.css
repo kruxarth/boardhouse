@@ -336,7 +336,7 @@ select:focus-visible,
 }
 
 .seat-name {
-  max-width: 8rem;
+  max-width: 11rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1794,4 +1794,62 @@ select:focus-visible,
 .seat-kick:focus-visible {
   outline: 3px solid var(--wb-pink);
   outline-offset: 2px;
+}
+
+/* Your own name on your chip is a button that turns into a field. */
+.seat-name-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.seat-name-edit .glyph {
+  width: 0.8rem;
+  height: 0.8rem;
+  flex: none;
+  opacity: 0.45;
+}
+
+.seat-name-edit:hover .glyph,
+.seat-name-edit:focus-visible .glyph {
+  opacity: 1;
+}
+
+.seat-name-edit:focus-visible {
+  outline: 3px solid var(--wb-pink);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.seat-rename {
+  display: inline-flex;
+}
+
+.seat-rename input {
+  width: 8rem;
+  height: 1.55rem;
+  padding: 0 0.4rem;
+  border: 1.5px solid var(--wb-ink);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--wb-ink);
+  font: inherit;
+  font-size: 0.82rem;
+}
+
+.seat-rename input:focus-visible {
+  outline: 3px solid var(--wb-pink);
+  outline-offset: 1px;
+}
+
+.seat-name:has(.seat-rename) {
+  max-width: none;
+  overflow: visible;
 }

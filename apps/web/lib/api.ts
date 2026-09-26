@@ -62,6 +62,27 @@ export async function refreshSession(token: string): Promise<Session> {
     return response.data;
 }
 
+/** Same participant, new name: the server re-issues the token and renames any table they host. */
+export async function renameSession(token: string, name: string): Promise<Session> {
+    try {
+        const response = await axios.post<Session>(
+            `${BACKEND_URL}/session/refresh`,
+            { name },
+            { headers: { Authorization: `Bearer ${token}` } }
+        );
+        writeSession(response.data);
+        return response.data;
+    } catch (error) {
+        if (axios.isAxiosError(error) && error.response?.status === 400) {
+            throw new Error("Names are 2 to 24 characters");
+        }
+        if (isUnauthorizedError(error)) {
+            throw error;
+        }
+        throw new Error("Could not change your name");
+    }
+}
+
 export async function sessionForSitting(existing: Session | null, name?: string): Promise<Session> {
     if (existing) {
         try {

@@ -95,6 +95,10 @@ export function useTableSocket({
     setRecapEvents: (value: RecapEvent[] | null) => void;
 }) {
     const queueRef = useRef<Outgoing[]>([]);
+    const joinTokenRef = useRef(joinToken);
+    joinTokenRef.current = joinToken;
+    const participantId = session?.participantId ?? null;
+    const hasToken = joinToken !== null;
     const joinedRef = useRef(false);
     const socketRef = useRef(socket);
     const markersRef = useRef<[string | null, string | null]>([null, null]);
@@ -132,12 +136,12 @@ export function useTableSocket({
     }, []);
 
     useEffect(() => {
-        if (!socket || loading || !session || !joinToken) {
+        if (!socket || loading || !participantId || !hasToken) {
             return;
         }
 
         const ws = socket;
-        const me = session;
+        const me = { participantId };
         joinedRef.current = false;
         let settled = false;
         let snapshotSeen = false;
@@ -153,7 +157,7 @@ export function useTableSocket({
                 type: "join",
                 roomId: slug,
                 hostKey: hostKey || undefined,
-                token: joinToken,
+                token: joinTokenRef.current,
                 fromHouse: fromHouseRef.current,
             })
         );
@@ -437,8 +441,8 @@ export function useTableSocket({
     }, [
         socket,
         loading,
-        session,
-        joinToken,
+        participantId,
+        hasToken,
         slug,
         hostKey,
         router,

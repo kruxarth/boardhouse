@@ -8,7 +8,7 @@ import { useLocalSession } from "../hooks/useLocalSession";
 import { useSocket } from "../hooks/useSocket";
 import { useTableSocket, type DoorKind } from "../hooks/useTableSocket";
 import { useVoice } from "../hooks/useVoice";
-import { createSession, fetchRoom, isUnauthorizedError, refreshSession } from "../lib/api";
+import { createSession, fetchRoom, isUnauthorizedError, refreshSession, renameSession } from "../lib/api";
 import { rememberHostKey, readHostKey, clearSession } from "../lib/session";
 import { installAudioPrime, primeAudio } from "../lib/sounds";
 import { elapsedLabel, nudgeTableLine, SLOW_MS, WAKE_BUDGET_MS } from "../lib/wake";
@@ -59,7 +59,10 @@ export function TableRoom({
     const hostKey = hostKeyFromUrl || (ready ? readHostKey(slug) : null);
     const [joinToken, setJoinToken] = useState<string | null>(null);
     const preparedTokenRef = useRef<string | null>(null);
-    const { socket, loading, failed, waking: lineWaking } = useSocket(joinToken);
+    const { socket, loading, failed, waking: lineWaking } = useSocket(
+        joinToken,
+        session?.participantId ?? null
+    );
     const [roomWaking, setRoomWaking] = useState(false);
     const [wakeSince, setWakeSince] = useState(0);
     const joined = door === "joined";
@@ -287,6 +290,29 @@ export function TableRoom({
         } finally {
             setNamePending(false);
             setNamingSince(0);
+        }
+    }
+
+    // Renamed here, on the house page or in another tab: carry the new name onto this seat.
+    const seatName = table?.seats.find((seat) => seat.id === session?.participantId)?.name;
+    useEffect(() => {
+        if (joined && session && seatName && seatName !== session.name) {
+            send({ type: "rename", token: session.token });
+        }
+    }, [joined, session, seatName, send]);
+
+    async function rename(name: string) {
+        if (!session) {
+            return false;
+        }
+        try {
+            const next = await renameSession(session.token, name);
+            preparedTokenRef.current = next.token;
+            setSession(next);
+            return true;
+        } catch (error) {
+            setToast(error instanceof Error ? error.message : "Could not change your name");
+            return false;
         }
     }
 
@@ -520,6 +546,7 @@ export function TableRoom({
                 onEnd={() => send({ type: "end_room" })}
                 onMute={(participantId) => send({ type: "mute_participant", participantId })}
                 onKick={(participantId) => send({ type: "kick", participantId })}
+                onRename={rename}
                 onMic={() => void toggleMic()}
                 onAllowMic={() => void allowMic()}
                 onListenOnly={() => void listenOnly()}

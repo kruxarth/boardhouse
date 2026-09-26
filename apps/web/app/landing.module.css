@@ -81,6 +81,104 @@
   white-space: nowrap;
 }
 
+.headerSide {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.4rem;
+}
+
+.whoami {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.whoamiName {
+  font-family: var(--hand);
+  font-size: 1.15rem;
+}
+
+.whoamiChange {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.whoamiForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 22rem;
+}
+
+.whoamiLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+
+.whoamiInput {
+  width: 11rem;
+  height: 36px;
+  padding: 0 10px;
+  border: 1.5px solid var(--ink);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font-size: 0.95rem;
+}
+
+.whoamiSave {
+  height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--ink);
+  color: var(--board);
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.whoamiSave:disabled {
+  opacity: 0.5;
+}
+
+.whoamiForm .whoamiChange {
+  height: 36px;
+}
+
+.whoamiError {
+  flex-basis: 100%;
+  margin: 0;
+  text-align: right;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.whoamiInput:focus-visible,
+.whoamiSave:focus-visible,
+.whoamiChange:focus-visible {
+  outline: 3px solid var(--pink);
+  outline-offset: 2px;
+}
+
 .stage {
   position: relative;
   display: grid;
@@ -820,6 +918,17 @@
 
   .count {
     padding-top: 0;
+  }
+
+  .headerSide,
+  .whoami,
+  .whoamiForm {
+    align-items: flex-start;
+    justify-content: flex-start;
+  }
+
+  .whoamiError {
+    text-align: left;
   }
 
   .house {

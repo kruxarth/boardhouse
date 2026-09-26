@@ -7,6 +7,7 @@ import { JWT_SECRET } from "@repo/backend-common/config";
 import { livekitConfigured, mintLivekitToken } from "@repo/backend-common/livekit";
 import { MAX_ROOMS, SESSION_TTL_SECONDS } from "@repo/common/constants";
 import { ClaimRoomSchema, CreateRoomSchema, CreateSessionSchema } from "@repo/common/types";
+import { prismaClient } from "@repo/db";
 import { middleware } from "./middleware";
 import {
     claimUnusedRoom,
@@ -123,12 +124,31 @@ app.post("/session", sessionLimiter, async (req, res) => {
     return res.status(201).json(issueSession(randomUUID(), parsed.data.name));
 });
 
-app.post("/session/refresh", middleware, (req, res) => {
+// A body with a name renames the same participant, so seats, markers and host rights stay theirs.
+app.post("/session/refresh", middleware, async (req, res) => {
     if (!req.participantId || !req.participantName) {
         return res.status(401).json({ message: "Unauthorized" });
     }
+    if (req.body?.name === undefined) {
+        return res.json(issueSession(req.participantId, req.participantName));
+    }
 
-    return res.json(issueSession(req.participantId, req.participantName));
+    const parsed = CreateSessionSchema.safeParse(req.body);
+    if (!parsed.success) {
+        return res.status(400).json({ message: "Name must be 2–24 characters" });
+    }
+    const name = parsed.data.name;
+    if (name !== req.participantName) {
+        try {
+            await prismaClient.room.updateMany({
+                where: { hostParticipantId: req.participantId },
+                data: { hostName: name },
+            });
+        } catch (error) {
+            console.error("Error renaming host:", error);
+        }
+    }
+    return res.json(issueSession(req.participantId, name));
 });
 
 app.get("/occupancy", async (_req, res) => {

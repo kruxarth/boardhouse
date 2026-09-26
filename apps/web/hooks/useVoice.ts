@@ -35,9 +35,13 @@ export function useVoice(options: {
     const [error, setError] = useState<string | null>(null);
     const [unlockNeeded, setUnlockNeeded] = useState(false);
     const [speakingIds, setSpeakingIds] = useState<string[]>([]);
+    // A rename swaps the token; voice keeps its connection and only needs a token to mint one.
+    const tokenRef = useRef(options.token);
+    tokenRef.current = options.token;
+    const hasToken = options.token !== null;
 
     useEffect(() => {
-        if (!options.enabled || !options.token) {
+        if (!options.enabled || !hasToken) {
             return;
         }
 
@@ -116,7 +120,7 @@ export function useVoice(options: {
 
         (async () => {
             try {
-                const minted = await fetchLivekitToken(options.token!, options.slug);
+                const minted = await fetchLivekitToken(tokenRef.current ?? "", options.slug);
                 if (cancelled) {
                     return;
                 }
@@ -159,7 +163,7 @@ export function useVoice(options: {
             void room.disconnect();
             roomRef.current = null;
         };
-    }, [options.enabled, options.token, options.slug]);
+    }, [options.enabled, hasToken, options.slug]);
 
     async function unlockPlayback() {
         const room = roomRef.current;

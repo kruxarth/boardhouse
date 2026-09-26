@@ -22,7 +22,7 @@ import {
     handleTakeMarker,
 } from "./markers";
 import { handleCanvas, handleCursor, handleGetReplay } from "./canvas";
-import { handleMuteParticipant, handleReact, handleSetMuted } from "./voice";
+import { handleMuteParticipant, handleReact, handleRename, handleSetMuted } from "./voice";
 
 export type Handler = (connection: Connection, message: ClientMessage) => Promise<void>;
 
@@ -47,6 +47,7 @@ export const handlers: Record<ClientMessage["type"], Handler> = {
     cursor: handleCursor,
     mute_participant: handleMuteParticipant,
     kick: handleKick,
+    rename: handleRename,
     set_muted: handleSetMuted,
     react: handleReact,
     get_replay: handleGetReplay,
