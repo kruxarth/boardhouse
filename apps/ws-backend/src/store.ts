@@ -65,6 +65,8 @@ export type LiveRoom = {
     markerGrace: Map<string, ReturnType<typeof setTimeout>>;
     /** Last seated count written to the database. -1 means it still needs a write. */
     seatedPersisted: number;
+    /** Shown out by the host; kept out until the sitting ends. */
+    kicked: Set<string>;
 };
 
 function shuffled(count: number) {
@@ -230,6 +232,7 @@ export function createLiveRoom(row: {
         replayBytes: 0,
         markerGrace: new Map(),
         seatedPersisted: -1,
+        kicked: new Set(),
     };
     appendReplay(room, "canvas", room.canvas);
     return room;

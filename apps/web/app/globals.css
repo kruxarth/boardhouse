@@ -1751,3 +1751,47 @@ select:focus-visible,
   outline: 3px solid var(--wb-pink);
   outline-offset: 2px;
 }
+
+/* The host's boot on everyone else's chip. */
+.seat-kick {
+  display: grid;
+  place-items: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  margin-left: 0.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #4a5570;
+  cursor: pointer;
+}
+
+.seat-kick .glyph {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.seat-kick:hover {
+  background: rgb(226 58 116 / 0.12);
+  color: var(--wb-pink);
+}
+
+.seat-kick-armed {
+  width: auto;
+  padding: 0 0.6rem;
+  background: var(--wb-pink);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.seat-kick-armed:hover {
+  background: #c92f64;
+  color: #fff;
+}
+
+.seat-kick:focus-visible {
+  outline: 3px solid var(--wb-pink);
+  outline-offset: 2px;
+}

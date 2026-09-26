@@ -50,6 +50,7 @@ function room(partial: Partial<LiveRoom> = {}): LiveRoom {
         replayBytes: 0,
         markerGrace: new Map(),
         seatedPersisted: -1,
+        kicked: new Set(),
         ...partial,
     };
 }

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { KICKED_CLOSE_CODE } from "@repo/common/constants";
 import { WS_BACKEND_URL } from "../app/config";
 import { WAKE_BUDGET_MS } from "../lib/wake";
 
@@ -55,9 +56,15 @@ export function useSocket(token: string | null) {
                 if (stopped) {
                     return;
                 }
-                if (event.code === 1008 || event.code === 4000 || event.code === 4001) {
+                if (
+                    event.code === 1008 ||
+                    event.code === 4000 ||
+                    event.code === 4001 ||
+                    event.code === KICKED_CLOSE_CODE
+                ) {
                     // 1008: bad session (retrying won't help).
                     // 4000: sitting wiped. 4001: replaced by another tab (must not fight it).
+                    // KICKED_CLOSE_CODE: the host showed this seat out.
                     setFailed(event.code === 1008);
                     setWaking(false);
                     setLoading(false);

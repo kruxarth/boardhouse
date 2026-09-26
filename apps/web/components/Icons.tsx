@@ -14,6 +14,19 @@ export function InkStroke({ ink }: { ink: string }) {
     );
 }
 
+/** Showing someone out of the table. */
+export function BootIcon() {
+    return (
+        <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">
+            <path
+                d="M6.5 2.5h5.5v8l5.4 2.6c1.8.9 3 2.5 3 4.4v1.5H4v-3.3c1.6-.8 2.5-2.3 2.5-4.2z"
+                fill="currentColor"
+            />
+            <path d="M3.5 21.5h17.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        </svg>
+    );
+}
+
 export function MicIcon() {
     return (
         <svg aria-hidden="true" viewBox="0 0 24 24" className="glyph">

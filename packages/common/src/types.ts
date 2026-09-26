@@ -111,6 +111,11 @@ export const CursorMessageSchema = z.object({
     button: z.enum(["up", "down"]).optional(),
 });
 
+export const KickMessageSchema = z.object({
+    type: z.literal("kick"),
+    participantId: z.string().min(1).max(100),
+});
+
 export const MuteParticipantMessageSchema = z.object({
     type: z.literal("mute_participant"),
     participantId: z.string().min(1).max(100),
@@ -160,6 +165,7 @@ export const ClientMessageSchema = z.discriminatedUnion("type", [
     CanvasMessageSchema,
     CursorMessageSchema,
     MuteParticipantMessageSchema,
+    KickMessageSchema,
     SetMutedMessageSchema,
     ReactMessageSchema,
     GetReplayMessageSchema,
@@ -229,6 +235,7 @@ export const ServerMessageSchema = z.discriminatedUnion("type", [
     z.object({ type: z.literal("joined"), slug: z.string() }),
     z.object({ type: z.literal("waiting") }),
     z.object({ type: z.literal("denied"), message: z.string() }),
+    z.object({ type: z.literal("removed"), message: z.string() }),
     z.object({ type: z.literal("full"), message: z.string() }),
     z.object({ type: z.literal("expired"), message: z.string() }),
     z.object({ type: z.literal("missing"), message: z.string() }),

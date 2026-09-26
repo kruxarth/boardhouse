@@ -1,5 +1,5 @@
 import { readSessionToken } from "@repo/backend-common/config";
-import { MAX_SEATS, MAX_WAITERS } from "@repo/common/constants";
+import { KICKED_CLOSE_CODE, MAX_SEATS, MAX_WAITERS } from "@repo/common/constants";
 import type { AskOutcome, RoomStatePayload, ServerMessage } from "@repo/common/types";
 import { prismaClient } from "@repo/db";
 import { deleteLivekitRooms } from "@repo/backend-common/livekit";
@@ -277,6 +277,23 @@ function releaseHeldMarkers(room: LiveRoom, participantId: string) {
     }
     refreshAsks(room);
     broadcastRoomState(room);
+}
+
+export const SHOWN_OUT_MESSAGE = "The host showed you out of this table";
+
+/** The host showed someone out: their markers free up now, not after the grace, and the socket closes for good. */
+export function showOut(room: LiveRoom, participantId: string) {
+    room.kicked.add(participantId);
+    const seat = room.admitted.get(participantId) ?? room.waiting.get(participantId);
+    if (!seat) {
+        return false;
+    }
+    sendJson(seat.ws, { type: "removed", message: SHOWN_OUT_MESSAGE });
+    detachSocket(room, seat.ws);
+    clearMarkerGrace(room, participantId);
+    releaseHeldMarkers(room, participantId);
+    seat.ws.close(KICKED_CLOSE_CODE, "Shown out");
+    return true;
 }
 
 export function markTableEmpty(room: LiveRoom) {

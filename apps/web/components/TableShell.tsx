@@ -9,6 +9,7 @@ import { installAudioPrime, playMarkerChime } from "../lib/sounds";
 import { Avatar } from "./Avatars";
 import {
     AskIcon,
+    BootIcon,
     CloseIcon,
     DownloadIcon,
     DrawerIcon,
@@ -27,7 +28,7 @@ import {
 } from "./Icons";
 import { SittingRecap, type RecapEvent } from "./SittingRecap";
 
-type DoorKind = "connecting" | "waiting" | "denied" | "full" | "expired" | "missing" | "error";
+type DoorKind = "connecting" | "waiting" | "denied" | "removed" | "full" | "expired" | "missing" | "error";
 
 export type MarkerAsk = {
     requestId: string;
@@ -181,6 +182,7 @@ export function TableShell({
     onRotate,
     onEnd,
     onMute,
+    onKick,
     onMic,
     onAllowMic,
     onListenOnly,
@@ -228,6 +230,7 @@ export function TableShell({
     onRotate: () => void;
     onEnd: () => void;
     onMute: (participantId: string) => void;
+    onKick: (participantId: string) => void;
     onMic: () => void;
     onAllowMic: () => void;
     onListenOnly: () => void;
@@ -435,6 +438,7 @@ export function TableShell({
                                 reactions={reactions.filter((item) => item.participantId === seat.id)}
                                 onMic={onMic}
                                 onMute={onMute}
+                                onKick={onKick}
                             />
                             );
                         })}
@@ -724,6 +728,7 @@ function SeatChip({
     reactions,
     onMic,
     onMute,
+    onKick,
 }: {
     seat: PresencePerson;
     isMe: boolean;
@@ -736,6 +741,7 @@ function SeatChip({
     reactions: LiveReaction[];
     onMic: () => void;
     onMute: (participantId: string) => void;
+    onKick: (participantId: string) => void;
 }) {
     const live = isMe ? micOn : !seat.muted;
     const micClass = `seat-mic${live ? " mic-on" : " mic-off"}${speaking ? " seat-mic-speaking" : ""}`;
@@ -784,6 +790,9 @@ function SeatChip({
                     {speaking ? <span className="sr-only">speaking</span> : null}
                 </span>
             )}
+            {iAmHost && !isMe && !isTheHost ? (
+                <KickButton name={seat.name} onKick={() => onKick(seat.id)} />
+            ) : null}
             <span aria-hidden="true" className="seat-floats">
                 {reactions.map((item) => (
                     <span className="float-emoji" key={item.id}>
@@ -792,6 +801,44 @@ function SeatChip({
                 ))}
             </span>
         </li>
+    );
+}
+
+/** One click arms it, the second shows them out, so a stray click can't. */
+function KickButton({ name, onKick }: { name: string; onKick: () => void }) {
+    const [armed, setArmed] = useState(false);
+
+    useEffect(() => {
+        if (!armed) {
+            return;
+        }
+        const timer = window.setTimeout(() => setArmed(false), 4_000);
+        return () => window.clearTimeout(timer);
+    }, [armed]);
+
+    if (armed) {
+        return (
+            <button
+                aria-label={`Confirm: show ${name} out`}
+                className="seat-kick seat-kick-armed"
+                onBlur={() => setArmed(false)}
+                onClick={onKick}
+                type="button"
+            >
+                Kick
+            </button>
+        );
+    }
+    return (
+        <button
+            aria-label={`Show ${name} out`}
+            className="seat-kick"
+            onClick={() => setArmed(true)}
+            title={`Show ${name} out`}
+            type="button"
+        >
+            <BootIcon />
+        </button>
     );
 }
 
@@ -1191,6 +1238,11 @@ export function doorCopy(kind: DoorKind): { title: string; body: string } {
             return {
                 title: "Door stayed shut",
                 body: "The host kept this door closed.",
+            };
+        case "removed":
+            return {
+                title: "You were shown out",
+                body: "The host showed you out of this table.",
             };
         case "full":
             return {

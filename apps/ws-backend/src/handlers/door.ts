@@ -20,6 +20,8 @@ import {
     sendError,
     sendJson,
     sessionOf,
+    showOut,
+    SHOWN_OUT_MESSAGE,
     wipeSitting,
 } from "../room-ops";
 import { guestSeatOpen, hostSeatOpen, isExpired } from "../store";
@@ -73,6 +75,11 @@ export async function handleJoin(connection: Connection, message: ClientMessage)
                 return;
             }
             admit(live, connection);
+            return;
+        }
+
+        if (live.kicked.has(session.participantId)) {
+            sendJson(connection.ws, { type: "removed", message: SHOWN_OUT_MESSAGE });
             return;
         }
 
@@ -180,6 +187,23 @@ export async function handleDeny(connection: Connection, message: ClientMessage)
     room.waiting.delete(message.participantId);
     sendJson(waiter.ws, { type: "denied", message: "The host kept the door closed" });
     broadcastRoomState(room);
+}
+
+export async function handleKick(connection: Connection, message: ClientMessage) {
+    if (message.type !== "kick") {
+        return;
+    }
+    const room = requireHost(connection);
+    if (!room) {
+        return;
+    }
+    if (message.participantId === room.hostParticipantId) {
+        sendError(connection.ws, "The host can't show themselves out");
+        return;
+    }
+    if (!showOut(room, message.participantId)) {
+        sendError(connection.ws, "They already left");
+    }
 }
 
 export async function handleSetMode(connection: Connection, message: ClientMessage) {

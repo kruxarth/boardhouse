@@ -156,6 +156,7 @@ export function TableRoom({
             setJoinToken(null);
             setDoor((current) =>
                 current === "denied" ||
+                current === "removed" ||
                 current === "full" ||
                 current === "expired" ||
                 current === "missing" ||
@@ -436,7 +437,11 @@ export function TableRoom({
                             Back to the house
                         </Link>
                     </div>
-                ) : door === "denied" || door === "missing" || door === "expired" || door === "full" ? (
+                ) : door === "denied" ||
+                  door === "removed" ||
+                  door === "missing" ||
+                  door === "expired" ||
+                  door === "full" ? (
                     <Link className="btn btn-brass" href="/">
                         Back to the house
                     </Link>
@@ -514,6 +519,7 @@ export function TableRoom({
                 onRotate={() => send({ type: "rotate_slug" })}
                 onEnd={() => send({ type: "end_room" })}
                 onMute={(participantId) => send({ type: "mute_participant", participantId })}
+                onKick={(participantId) => send({ type: "kick", participantId })}
                 onMic={() => void toggleMic()}
                 onAllowMic={() => void allowMic()}
                 onListenOnly={() => void listenOnly()}

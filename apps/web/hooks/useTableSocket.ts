@@ -15,6 +15,7 @@ export type DoorKind =
     | "connecting"
     | "waiting"
     | "denied"
+    | "removed"
     | "full"
     | "expired"
     | "missing"
@@ -256,6 +257,13 @@ export function useTableSocket({
             if (message.type === "denied") {
                 settled = true;
                 setDoor("denied");
+                return;
+            }
+            if (message.type === "removed") {
+                settled = true;
+                joinedRef.current = false;
+                setDoor("removed");
+                setDoorMessage(message.message);
                 return;
             }
             if (message.type === "full") {
