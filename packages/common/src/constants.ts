@@ -3,7 +3,7 @@ export const MAX_SEATS = 10;
 export const MAX_WAITERS = 20;
 export const ROOM_TTL_MS = 24 * 60 * 60 * 1000;
 /** After this with nobody seated, the house marks the table unused so someone else can claim it. */
-export const EMPTY_TABLE_MS = 10 * 60 * 1000;
+export const EMPTY_TABLE_MS = 60 * 60 * 1000;
 /** Same length as a sitting; jwt.sign treats a number as seconds. */
 export const SESSION_TTL_SECONDS = Math.floor(ROOM_TTL_MS / 1000);
 export const MAX_CANVAS_MESSAGE_BYTES = 600_000;
@@ -20,6 +20,8 @@ export const HOLDER_IDLE_MS = 45_000;
 export const ASK_COOLDOWN_MS = 8_000;
 /** Keep a disconnected seat's markers so a refresh can pick them back up. */
 export const MARKER_GRACE_MS = 30_000;
+/** A kicked seat's socket closes with this; the client must not reconnect. */
+export const KICKED_CLOSE_CODE = 4002;
 /** How long a guest must wait before knocking again. */
 export const KNOCK_COOLDOWN_MS = 12_000;
 export const REACTION_MIN_GAP_MS = 800;

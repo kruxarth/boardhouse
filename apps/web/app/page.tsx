@@ -230,7 +230,7 @@ export default function Home() {
     const hint = wakeSince
         ? `The house naps when nobody's around. Waking it up can take a minute or two. Waiting ${elapsedLabel(now - wakeSince)}.`
         : houseFull
-          ? "Every table is taken. A table frees up when it's been quiet for 10 minutes."
+          ? "Every table is taken. A table frees up when it's been quiet for an hour."
           : "Knock on a pink table to join it, or sit at an empty one to host.";
 
     return (

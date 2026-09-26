@@ -1,5 +1,6 @@
 "use client";
 
+import { EMPTY_TABLE_MS } from "@repo/common/constants";
 import styles from "../app/landing.module.css";
 import type { HouseTable } from "../lib/api";
 import { Smudge, WindowDoodle, WindowOutline, wobble, type TrayMood } from "./HouseArt";
@@ -76,7 +77,7 @@ export function HouseWindow({
     const host = table.hostName?.trim() || "Someone";
 
     if (table.unused) {
-        const quietMin = Math.max(10, Math.floor((table.quietMs ?? 0) / 60_000));
+        const quietMin = Math.max(EMPTY_TABLE_MS / 60_000, Math.floor((table.quietMs ?? 0) / 60_000));
         const quietLabel =
             quietMin >= 120 ? `Quiet ${Math.floor(quietMin / 60)}h` : `Quiet ${quietMin}m`;
         return (
